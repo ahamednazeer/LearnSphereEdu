@@ -50,13 +50,16 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/shared ./shared
 
+# Copy uploads folder with existing materials and thumbnails
+COPY --from=builder /app/uploads ./uploads
+
 # Copy a pre-seeded database (you need to create this locally with schema + data)
 COPY db.sqlite /app/init/db.sqlite
 RUN chown -R nextjs:nodejs /app/init
 
-# Create required directories
-RUN mkdir -p /app/data uploads/materials uploads/thumbnails \
-    && chown -R nextjs:nodejs /app/data uploads
+# Create required directories and set ownership
+RUN mkdir -p /app/data \
+    && chown -R nextjs:nodejs /app/data /app/uploads
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /docker-entrypoint.sh

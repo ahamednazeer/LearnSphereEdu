@@ -115,7 +115,7 @@ export default function CourseLearning() {
   });
 
   // Get course details
-  const { data: course } = useQuery({
+  const { data: course, isLoading: courseLoading, error: courseError } = useQuery({
     queryKey: ["/api/protected/courses", courseId],
     queryFn: async () => {
       const res = await authenticatedApiRequest("GET", `/api/protected/courses/${courseId}`);
@@ -1117,10 +1117,49 @@ export default function CourseLearning() {
     }
   }, [bookmarks, lesson?.id]);
 
+  // Debug logging
+  console.log('Course Learning Debug:', {
+    courseId,
+    isLoading,
+    courseLoading,
+    courseData: !!courseData,
+    course: !!course,
+    modulesError: modulesError?.message,
+    courseError: courseError?.message,
+    user: user?.role
+  });
+
   // Check if there's an enrollment error
   const isNotEnrolled = modulesError?.message?.includes("Not enrolled in this course");
   
-  if (isLoading || !course) return <div>Loading...</div>;
+  // Show loading state while either query is loading
+  if (isLoading || courseLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading course...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error if course details failed to load
+  if (courseError) {
+    return (
+      <div className="max-w-3xl mx-auto py-8">
+        <Card>
+          <CardContent className="p-8 text-center">
+            <h3 className="text-lg font-medium text-foreground mb-2">Error Loading Course</h3>
+            <p className="text-muted-foreground mb-4">{courseError.message}</p>
+            <Button onClick={() => setLocation('/courses')}>
+              Back to Courses
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   // Show enrollment prompt if student is not enrolled
   if (isNotEnrolled && user?.role === 'student') {
@@ -2606,9 +2645,9 @@ export default function CourseLearning() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Start New Discussion</DialogTitle>
-            <DialogDescription>
+            <p className="text-sm text-muted-foreground">
               Create a discussion topic for this course
-            </DialogDescription>
+            </p>
           </DialogHeader>
           <form onSubmit={handleCreateDiscussion} className="space-y-4">
             <div>
