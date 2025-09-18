@@ -8,11 +8,34 @@ import { Badge } from "@/components/ui/badge";
 import { useLocation } from "wouter";
 import { 
   BookOpen, CheckCircle, TrendingUp, Clock, 
-  Users, BarChart3, PlusCircle 
+  Users, BarChart3, PlusCircle, Award, Target, Calendar
 } from "lucide-react";
+import { PageLoadingSpinner } from "@/components/ui/loading-spinner";
+import { EmptyState } from "@/components/ui/empty-state";
+import { StatsCard } from "@/components/ui/stats-card";
+import { CourseCard } from "@/components/ui/course-card";
 
 export default function Dashboard() {
   const { user } = useAuth();
+  // Fetch recent grades for students
+  const { data: recentGrades = [], isLoading: gradesLoading } = useQuery({
+    queryKey: ["/api/protected/user/recent-grades"],
+    queryFn: async () => {
+      const response = await authenticatedApiRequest("GET", "/api/protected/user/recent-grades");
+      return response.json();
+    },
+    enabled: user?.role === "student",
+  });
+
+  // Fetch recent activity for teachers
+  const { data: recentActivity = [], isLoading: activityLoading } = useQuery({
+    queryKey: ["/api/protected/user/recent-activity"],
+    queryFn: async () => {
+      const response = await authenticatedApiRequest("GET", "/api/protected/user/recent-activity");
+      return response.json();
+    },
+    enabled: user?.role === "teacher",
+  });
   const [, setLocation] = useLocation();
 
   const { data: courses = [], isLoading: coursesLoading } = useQuery({
@@ -44,11 +67,7 @@ export default function Dashboard() {
   };
 
   if (coursesLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
-      </div>
-    );
+    return <PageLoadingSpinner />;
   }
 
   return (
@@ -90,94 +109,63 @@ export default function Dashboard() {
 
       {/* Dashboard Stats */}
       <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center">
-                    <BookOpen className="w-5 h-5 text-primary" />
-                  </div>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-muted-foreground truncate">
-                      {user?.role === "teacher" ? "My Courses" : "Active Courses"}
-                    </dt>
-                    <dd className="text-lg font-medium text-foreground" data-testid="stat-courses">
-                      {courses.length}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 bg-secondary/10 rounded-lg flex items-center justify-center">
-                    <CheckCircle className="w-5 h-5 text-secondary" />
-                  </div>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-muted-foreground truncate">
-                      {user?.role === "teacher" ? "Students" : "Completed"}
-                    </dt>
-                    <dd className="text-lg font-medium text-foreground" data-testid="stat-completed">
-                      {user?.role === "teacher" ? "156" : "12"}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 bg-accent/10 rounded-lg flex items-center justify-center">
-                    <TrendingUp className="w-5 h-5 text-accent" />
-                  </div>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-muted-foreground truncate">
-                      {user?.role === "teacher" ? "Avg Score" : "Average Grade"}
-                    </dt>
-                    <dd className="text-lg font-medium text-foreground" data-testid="stat-grade">
-                      87%
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
-                    <Clock className="w-5 h-5 text-purple-600" />
-                  </div>
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-muted-foreground truncate">
-                      {user?.role === "teacher" ? "Engagement" : "Study Hours"}
-                    </dt>
-                    <dd className="text-lg font-medium text-foreground" data-testid="stat-hours">
-                      {user?.role === "teacher" ? "92%" : "24"}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <StatsCard
+            title={user?.role === "teacher" ? "My Courses" : "Enrolled Courses"}
+            value={courses.length}
+            icon={BookOpen}
+            description={user?.role === "teacher" ? "Courses created" : "Active enrollments"}
+          />
+          
+          {user?.role === "student" && (
+            <>
+              <StatsCard
+                title="Completed Lessons"
+                value="24"
+                icon={CheckCircle}
+                description="This month"
+                trend={{ value: 12, isPositive: true }}
+              />
+              <StatsCard
+                title="Study Hours"
+                value="18.5"
+                icon={Clock}
+                description="This week"
+                trend={{ value: 8, isPositive: true }}
+              />
+              <StatsCard
+                title="Certificates"
+                value="3"
+                icon={Award}
+                description="Earned"
+              />
+            </>
+          )}
+          
+          {user?.role === "teacher" && (
+            <>
+              <StatsCard
+                title="Total Students"
+                value="156"
+                icon={Users}
+                description="Across all courses"
+                trend={{ value: 15, isPositive: true }}
+              />
+              <StatsCard
+                title="Avg. Rating"
+                value="4.8"
+                icon={Target}
+                description="Course rating"
+              />
+              <StatsCard
+                title="This Month"
+                value="12"
+                icon={Calendar}
+                description="New enrollments"
+                trend={{ value: 25, isPositive: true }}
+              />
+            </>
+          )}
         </div>
 
         {/* Course Grid and Activity */}
@@ -198,62 +186,31 @@ export default function Dashboard() {
             </div>
 
             {courses.length === 0 ? (
-              <Card>
-                <CardContent className="p-8 text-center">
-                  <BookOpen className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-foreground mb-2">
-                    {user?.role === "teacher" ? "No courses created yet" : "No courses enrolled yet"}
-                  </h3>
-                  <p className="text-muted-foreground mb-4">
-                    {user?.role === "teacher" 
-                      ? "Create your first course to get started teaching."
-                      : "Enroll in courses to start your learning journey."
-                    }
-                  </p>
-                  <Button onClick={() => setLocation("/courses")} data-testid="button-get-started">
-                    {user?.role === "teacher" ? "Create Course" : "Browse Courses"}
-                  </Button>
-                </CardContent>
-              </Card>
+              <EmptyState
+                icon={BookOpen}
+                title={user?.role === "teacher" ? "No courses created yet" : "No courses enrolled yet"}
+                description={user?.role === "teacher" 
+                  ? "Create your first course to get started teaching."
+                  : "Enroll in courses to start your learning journey."
+                }
+                action={{
+                  label: user?.role === "teacher" ? "Create Course" : "Browse Courses",
+                  onClick: () => setLocation("/courses")
+                }}
+              />
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {courses.slice(0, 4).map((course: any) => (
-                  <Card 
-                    key={course.id} 
-                    className="hover:shadow-md transition-shadow cursor-pointer"
-                    onClick={() => setLocation(`/courses/${course.id}`)}
+                  <CourseCard
+                    key={course.id}
+                    course={course}
+                    progress={75}
+                    isEnrolled={user?.role === "student"}
+                    userRole={user?.role}
+                    onContinue={(courseId) => setLocation(`/courses/${courseId}`)}
+                    className="cursor-pointer"
                     data-testid={`course-card-${course.id}`}
-                  >
-                    <div className="aspect-video bg-gradient-to-br from-primary/20 to-secondary/20 rounded-t-lg"></div>
-                    <CardContent className="p-6">
-                      <div className="flex items-center justify-between mb-2">
-                        <Badge variant="secondary" className={getSubjectColor(course.subject)}>
-                          {course.subject}
-                        </Badge>
-                        {user?.role === "student" && (
-                          <span className="text-sm text-muted-foreground">75%</span>
-                        )}
-                      </div>
-                      <h3 className="text-lg font-semibold text-foreground mb-2">{course.title}</h3>
-                      <p className="text-muted-foreground text-sm mb-4 line-clamp-2">
-                        {course.description}
-                      </p>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center text-sm text-muted-foreground">
-                          <Users className="w-4 h-4 mr-1" />
-                          <span>{user?.role === "teacher" ? "24 students" : `Dr. ${course.teacherId?.slice(-6)}`}</span>
-                        </div>
-                        <Button size="sm" data-testid={`button-continue-${course.id}`}>
-                          {user?.role === "teacher" ? "Manage" : "Continue"}
-                        </Button>
-                      </div>
-                      {user?.role === "student" && (
-                        <div className="mt-4">
-                          <Progress value={75} className="h-2" />
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
+                  />
                 ))}
               </div>
             )}
@@ -300,76 +257,6 @@ export default function Dashboard() {
               </Card>
             )}
 
-            {/* Upcoming Items */}
-            <Card className="mb-6">
-              <CardHeader>
-                <CardTitle>
-                  {user?.role === "teacher" ? "Recent Submissions" : "Upcoming Assessments"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {user?.role === "teacher" ? (
-                    <>
-                      <div className="flex items-start space-x-3">
-                        <div className="flex-shrink-0 w-2 h-2 bg-secondary rounded-full mt-2"></div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-foreground">Alice Johnson</p>
-                          <p className="text-xs text-muted-foreground">Calculus Midterm - 94%</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="flex-shrink-0 w-2 h-2 bg-accent rounded-full mt-2"></div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-foreground">Bob Chen</p>
-                          <p className="text-xs text-muted-foreground">Web Dev Project - 87%</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="flex-shrink-0 w-2 h-2 bg-primary rounded-full mt-2"></div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-foreground">Carol Williams</p>
-                          <p className="text-xs text-muted-foreground">Physics Quiz - 91%</p>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="flex items-start space-x-3">
-                        <div className="flex-shrink-0 w-2 h-2 bg-destructive rounded-full mt-2"></div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-foreground">Calculus Midterm</p>
-                          <p className="text-xs text-muted-foreground">Due: Tomorrow, 3:00 PM</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="flex-shrink-0 w-2 h-2 bg-accent rounded-full mt-2"></div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-foreground">Web Dev Project</p>
-                          <p className="text-xs text-muted-foreground">Due: Friday, 11:59 PM</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start space-x-3">
-                        <div className="flex-shrink-0 w-2 h-2 bg-secondary rounded-full mt-2"></div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-foreground">Physics Quiz</p>
-                          <p className="text-xs text-muted-foreground">Due: Next Monday</p>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-                <Button 
-                  variant="ghost" 
-                  className="w-full mt-4"
-                  onClick={() => setLocation(user?.role === "teacher" ? "/analytics" : "/assessments")}
-                  data-testid="button-view-all-activity"
-                >
-                  {user?.role === "teacher" ? "View All Submissions" : "View All Assessments"}
-                </Button>
-              </CardContent>
-            </Card>
-
             {/* Recent Grades for Students */}
             {user?.role === "student" && (
               <Card>
@@ -377,39 +264,61 @@ export default function Dashboard() {
                   <CardTitle>Recent Grades</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-foreground">History Essay</p>
-                        <p className="text-xs text-muted-foreground">World History</p>
-                      </div>
-                      <span className="text-sm font-semibold text-secondary">92%</span>
+                  {gradesLoading ? (
+                    <div className="text-center text-muted-foreground">Loading...</div>
+                  ) : recentGrades.length === 0 ? (
+                    <div className="text-center text-muted-foreground">No recent grades.</div>
+                  ) : (
+                    <div className="space-y-4">
+                      {recentGrades.map((grade: any) => (
+                        <div key={grade.id} className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-medium text-foreground">{grade.assessmentTitle}</p>
+                            <p className="text-xs text-muted-foreground">{grade.courseTitle}</p>
+                          </div>
+                          <span className="text-sm font-semibold text-secondary">
+                            {grade.score ?? "-"}/{grade.totalPoints ?? "-"}
+                          </span>
+                        </div>
+                      ))}
                     </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-foreground">Algorithm Quiz</p>
-                        <p className="text-xs text-muted-foreground">Computer Science</p>
-                      </div>
-                      <span className="text-sm font-semibold text-secondary">88%</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-foreground">Lab Report</p>
-                        <p className="text-xs text-muted-foreground">Physics</p>
-                      </div>
-                      <span className="text-sm font-semibold text-accent">85%</span>
-                    </div>
-                  </div>
-                  <Button 
-                    variant="ghost" 
-                    className="w-full mt-4"
-                    data-testid="button-view-grade-history"
-                  >
-                    View Grade History
-                  </Button>
+                  )}
                 </CardContent>
               </Card>
             )}
+
+            {/* Recent Activity for Teachers */}
+            {user?.role === "teacher" && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Recent Activity</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {activityLoading ? (
+                    <div className="text-center text-muted-foreground">Loading...</div>
+                  ) : recentActivity.length === 0 ? (
+                    <div className="text-center text-muted-foreground">No recent activity.</div>
+                  ) : (
+                    <div className="space-y-4">
+                      {recentActivity.map((item: any) => (
+                        <div key={item.id} className="flex items-start justify-between">
+                          <div>
+                            <p className="text-sm font-medium text-foreground">{item.studentName}</p>
+                            <p className="text-xs text-muted-foreground">{item.assessmentTitle} ({item.courseTitle})</p>
+                          </div>
+                          <span className="text-sm font-semibold text-secondary">
+                            {item.score ?? "-"}/{item.totalPoints ?? "-"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Recent Grades for Students */}
+            {/* No fake recent grades. Only show real data if available. */}
           </div>
         </div>
       </div>

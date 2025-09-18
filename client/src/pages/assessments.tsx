@@ -352,7 +352,14 @@ export default function Assessments() {
                   <span className="text-xs text-muted-foreground">
                     Created {new Date(assessment.createdAt).toLocaleDateString()}
                   </span>
-                  <Button size="sm" data-testid={`button-view-assessment-${assessment.id}`}>
+                  <Button 
+                    size="sm" 
+                    data-testid={`button-view-assessment-${assessment.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation(); // Prevent card click
+                      setLocation(`/assessments/${assessment.id}`);
+                    }}
+                  >
                     <Eye className="w-4 h-4 mr-1" />
                     {user?.role === "teacher" ? "Manage" : "Take"}
                   </Button>

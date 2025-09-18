@@ -1,0 +1,16 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Lesson</title>
+</head>
+<body>
+    <h1>Test Lesson Content</h1>
+    <p>This is a test HTML lesson file.</p>
+    <ul>
+        <li>Point 1: Introduction to concepts</li>
+        <li>Point 2: Practical examples</li>
+        <li>Point 3: Summary and conclusion</li>
+    </ul>
+</body>
+</html>

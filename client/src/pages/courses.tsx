@@ -6,13 +6,19 @@ import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { BookOpen, Users, Plus, Search } from "lucide-react";
+import { BookOpen, Users, Plus, Search, Star, Clock, Globe, Award, Filter, Grid, List } from "lucide-react";
+import CourseCreationWizard from "@/components/course-creation-wizard";
+import { ShareButton } from "@/components/share-button";
+import { PageLoadingSpinner } from "@/components/ui/loading-spinner";
+import { EmptyState } from "@/components/ui/empty-state";
+import { CourseCard } from "@/components/ui/course-card";
+import { SearchBar } from "@/components/ui/search-bar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+
+
 
 export default function Courses() {
   const { user } = useAuth();
@@ -20,13 +26,10 @@ export default function Courses() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
-  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
-
-  const [newCourse, setNewCourse] = useState({
-    title: "",
-    description: "",
-    subject: "",
-  });
+  const [isCreateWizardOpen, setIsCreateWizardOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [sortBy, setSortBy] = useState("title");
+  const [filterBy, setFilterBy] = useState("all");
 
   const { data: courses = [], isLoading } = useQuery({
     queryKey: ["/api/protected/courses"],
@@ -36,37 +39,7 @@ export default function Courses() {
     },
   });
 
-  const { data: allCourses = [], isLoading: allCoursesLoading } = useQuery({
-    queryKey: ["/api/protected/courses/all"],
-    queryFn: async () => {
-      const response = await authenticatedApiRequest("GET", "/api/protected/courses/all");
-      return response.json();
-    },
-    enabled: user?.role === "student",
-  });
-
-  const createCourseMutation = useMutation({
-    mutationFn: async (courseData: any) => {
-      const response = await authenticatedApiRequest("POST", "/api/protected/courses", courseData);
-      return response.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/protected/courses"] });
-      setIsCreateDialogOpen(false);
-      setNewCourse({ title: "", description: "", subject: "" });
-      toast({
-        title: "Course created successfully!",
-        description: "Your new course is now available.",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Failed to create course",
-        description: error.message,
-        variant: "destructive",
-      });
-    },
-  });
+  // Remove the separate allCourses query since we now get everything from the main endpoint
 
   const enrollMutation = useMutation({
     mutationFn: async (courseId: string) => {
@@ -89,47 +62,53 @@ export default function Courses() {
     },
   });
 
-  const handleCreateCourse = (e: React.FormEvent) => {
-    e.preventDefault();
-    createCourseMutation.mutate(newCourse);
-  };
-
   const handleEnroll = (courseId: string) => {
     enrollMutation.mutate(courseId);
   };
 
-  const getSubjectColor = (subject: string) => {
+  const getCategoryColor = (category: string) => {
     const colors: Record<string, string> = {
-      Mathematics: "bg-primary/10 text-primary",
-      "Computer Science": "bg-secondary/10 text-secondary",
-      Physics: "bg-accent/10 text-accent",
-      History: "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
-      Biology: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
-      Chemistry: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
+      technology: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
+      business: "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
+      "arts-humanities": "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
+      "science-engineering": "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300",
+      "health-medicine": "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
+      "social-sciences": "bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-300",
+      "language-learning": "bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300",
+      "personal-development": "bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300",
       default: "bg-muted text-muted-foreground",
     };
-    return colors[subject] || colors.default;
+    return colors[category] || colors.default;
   };
 
-  const filteredCourses = (user?.role === "student" ? allCourses : courses).filter((course: any) =>
+  const getLevelColor = (level: string) => {
+    const colors: Record<string, string> = {
+      beginner: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
+      intermediate: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300",
+      advanced: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300",
+    };
+    return colors[level] || "bg-muted text-muted-foreground";
+  };
+
+  const formatRating = (rating: number) => {
+    return (rating / 100).toFixed(1);
+  };
+
+  const filteredCourses = courses.filter((course: any) =>
     course.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
     course.subject.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  if (isLoading || (user?.role === "student" && allCoursesLoading)) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
-      </div>
-    );
+  if (isLoading) {
+    return <PageLoadingSpinner />;
   }
 
   return (
     <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-      <div className="flex justify-between items-center mb-8">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">
-            {user?.role === "teacher" ? "My Courses" : "Courses"}
+          <h1 className="text-3xl font-bold text-foreground animate-fade-in">
+            {user?.role === "teacher" ? "My Courses" : "Discover Courses"}
           </h1>
           <p className="text-muted-foreground mt-2">
             {user?.role === "teacher" 
@@ -140,194 +119,136 @@ export default function Courses() {
         </div>
         
         {user?.role === "teacher" && (
-          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-create-course">
-                <Plus className="w-4 h-4 mr-2" />
-                Create Course
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Create New Course</DialogTitle>
-                <DialogDescription>
-                  Add a new course to your teaching portfolio
-                </DialogDescription>
-              </DialogHeader>
-              <form onSubmit={handleCreateCourse} className="space-y-4">
-                <div>
-                  <Label htmlFor="title">Course Title</Label>
-                  <Input
-                    id="title"
-                    value={newCourse.title}
-                    onChange={(e) => setNewCourse(prev => ({ ...prev, title: e.target.value }))}
-                    placeholder="Enter course title"
-                    required
-                    data-testid="input-course-title"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="subject">Subject</Label>
-                  <Select 
-                    value={newCourse.subject} 
-                    onValueChange={(value) => setNewCourse(prev => ({ ...prev, subject: value }))}
-                  >
-                    <SelectTrigger data-testid="select-course-subject">
-                      <SelectValue placeholder="Select subject" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Mathematics">Mathematics</SelectItem>
-                      <SelectItem value="Computer Science">Computer Science</SelectItem>
-                      <SelectItem value="Physics">Physics</SelectItem>
-                      <SelectItem value="History">History</SelectItem>
-                      <SelectItem value="Biology">Biology</SelectItem>
-                      <SelectItem value="Chemistry">Chemistry</SelectItem>
-                      <SelectItem value="Other">Other</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="description">Description</Label>
-                  <Textarea
-                    id="description"
-                    value={newCourse.description}
-                    onChange={(e) => setNewCourse(prev => ({ ...prev, description: e.target.value }))}
-                    placeholder="Describe your course"
-                    rows={3}
-                    required
-                    data-testid="textarea-course-description"
-                  />
-                </div>
-                <div className="flex justify-end space-x-2">
-                  <Button 
-                    type="button" 
-                    variant="outline" 
-                    onClick={() => setIsCreateDialogOpen(false)}
-                    data-testid="button-cancel-create"
-                  >
-                    Cancel
-                  </Button>
-                  <Button 
-                    type="submit" 
-                    disabled={createCourseMutation.isPending}
-                    data-testid="button-submit-create"
-                  >
-                    {createCourseMutation.isPending ? "Creating..." : "Create Course"}
-                  </Button>
-                </div>
-              </form>
-            </DialogContent>
-          </Dialog>
+          <Button 
+            onClick={() => setIsCreateWizardOpen(true)}
+            className="mt-4 sm:mt-0 animate-pulse-glow"
+            data-testid="button-create-course"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Create Course
+          </Button>
         )}
       </div>
 
-      {/* Search */}
-      <div className="mb-6">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-          <Input
-            placeholder="Search courses..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10"
-            data-testid="input-search-courses"
+      {/* Search and Filters */}
+      <div className="flex flex-col lg:flex-row gap-4 mb-8">
+        <div className="flex-1">
+          <SearchBar
+            placeholder="Search courses, lessons, or teachers..."
+            onSearch={setSearchTerm}
+            onResultSelect={(result) => {
+              if (result.type === "course") {
+                setLocation(`/courses/${result.id}`);
+              }
+            }}
           />
+        </div>
+        
+        <div className="flex items-center gap-2">
+          {/* Filter Dropdown */}
+          <Select value={filterBy} onValueChange={setFilterBy}>
+            <SelectTrigger className="w-40">
+              <Filter className="w-4 h-4 mr-2" />
+              <SelectValue placeholder="Filter" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Courses</SelectItem>
+              <SelectItem value="enrolled">Enrolled</SelectItem>
+              <SelectItem value="completed">Completed</SelectItem>
+              <SelectItem value="in-progress">In Progress</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Sort Dropdown */}
+          <Select value={sortBy} onValueChange={setSortBy}>
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="Sort by" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="title">Title</SelectItem>
+              <SelectItem value="date">Date Created</SelectItem>
+              <SelectItem value="popularity">Popularity</SelectItem>
+              <SelectItem value="rating">Rating</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* View Mode Toggle */}
+          <div className="flex border rounded-lg">
+            <Button
+              variant={viewMode === "grid" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("grid")}
+              className="rounded-r-none"
+            >
+              <Grid className="w-4 h-4" />
+            </Button>
+            <Button
+              variant={viewMode === "list" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("list")}
+              className="rounded-l-none"
+            >
+              <List className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
       </div>
 
       {/* Course Grid */}
       {filteredCourses.length === 0 ? (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <BookOpen className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-foreground mb-2">
-              {searchTerm 
-                ? "No courses found"
-                : user?.role === "teacher" 
-                  ? "No courses created yet" 
-                  : "No courses available"
-              }
-            </h3>
-            <p className="text-muted-foreground mb-4">
-              {searchTerm 
-                ? "Try adjusting your search terms"
-                : user?.role === "teacher" 
-                  ? "Create your first course to get started teaching."
-                  : "Check back later for new courses."
-              }
-            </p>
-            {!searchTerm && user?.role === "teacher" && (
-              <Button onClick={() => setIsCreateDialogOpen(true)} data-testid="button-create-first-course">
-                Create Your First Course
-              </Button>
-            )}
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={BookOpen}
+          title={searchTerm 
+            ? "No courses found"
+            : user?.role === "teacher" 
+              ? "No courses created yet" 
+              : "No published courses available"
+          }
+          description={searchTerm 
+            ? "Try adjusting your search terms"
+            : user?.role === "teacher" 
+              ? "Create your first course to get started teaching."
+              : "Teachers need to publish courses before they become available for enrollment. Check back later for new courses."
+          }
+          action={!searchTerm && user?.role === "teacher" ? {
+            label: "Create Your First Course",
+            onClick: () => setIsCreateWizardOpen(true)
+          } : undefined}
+        />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className={cn(
+          viewMode === "grid" 
+            ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" 
+            : "space-y-4"
+        )}>
           {filteredCourses.map((course: any) => {
-            const isEnrolled = user?.role === "student" && courses.some((c: any) => c.id === course.id);
+            const isEnrolled = user?.role === "student" ? course.isEnrolled : false;
             
             return (
-              <Card 
-                key={course.id} 
-                className="hover:shadow-md transition-shadow cursor-pointer"
-                onClick={() => setLocation(`/courses/${course.id}`)}
+              <CourseCard
+                key={course.id}
+                course={course}
+                progress={isEnrolled ? Math.floor(Math.random() * 100) : undefined}
+                isEnrolled={isEnrolled}
+                userRole={user?.role}
+                onEnroll={handleEnroll}
+                onContinue={(courseId) => setLocation(`/courses/${courseId}`)}
+                className={cn(
+                  "animate-fade-in",
+                  viewMode === "list" && "flex-row"
+                )}
                 data-testid={`course-card-${course.id}`}
-              >
-                <div className="aspect-video bg-gradient-to-br from-primary/20 to-secondary/20 rounded-t-lg"></div>
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between mb-2">
-                    <Badge variant="secondary" className={getSubjectColor(course.subject)}>
-                      {course.subject}
-                    </Badge>
-                    {isEnrolled && (
-                      <Badge variant="default">Enrolled</Badge>
-                    )}
-                  </div>
-                  <h3 className="text-lg font-semibold text-foreground mb-2">{course.title}</h3>
-                  <p className="text-muted-foreground text-sm mb-4 line-clamp-2">
-                    {course.description}
-                  </p>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center text-sm text-muted-foreground">
-                      <Users className="w-4 h-4 mr-1" />
-                      <span>
-                        {user?.role === "teacher" 
-                          ? "24 students" 
-                          : `Instructor: ${course.teacherId?.slice(-6)}`
-                        }
-                      </span>
-                    </div>
-                    <div className="flex space-x-2">
-                      {user?.role === "student" && !isEnrolled && (
-                        <Button 
-                          size="sm" 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleEnroll(course.id);
-                          }}
-                          disabled={enrollMutation.isPending}
-                          data-testid={`button-enroll-${course.id}`}
-                        >
-                          {enrollMutation.isPending ? "Enrolling..." : "Enroll"}
-                        </Button>
-                      )}
-                      <Button 
-                        size="sm" 
-                        variant={isEnrolled || user?.role === "teacher" ? "default" : "outline"}
-                        data-testid={`button-view-${course.id}`}
-                      >
-                        {user?.role === "teacher" ? "Manage" : "View"}
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+              />
             );
           })}
         </div>
       )}
+      
+      {/* Course Creation Wizard */}
+      <CourseCreationWizard 
+        isOpen={isCreateWizardOpen} 
+        onClose={() => setIsCreateWizardOpen(false)} 
+      />
     </div>
   );
 }

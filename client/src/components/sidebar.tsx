@@ -20,8 +20,9 @@ export default function Sidebar() {
 
   const teacherNavigation = [
     { name: "Dashboard", icon: Home, path: "/dashboard" },
+    { name: "Instructor Dashboard", icon: BarChart3, path: "/instructor-dashboard" },
     { name: "My Courses", icon: BookOpen, path: "/courses" },
-    { name: "Create Course", icon: PlusCircle, path: "/courses/create" },
+
     { name: "Assessments", icon: FileText, path: "/assessments" },
     { name: "Analytics", icon: BarChart3, path: "/analytics" },
     { name: "Discussions", icon: MessageCircle, path: "/discussions" },

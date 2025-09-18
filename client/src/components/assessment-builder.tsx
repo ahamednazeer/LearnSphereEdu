@@ -24,6 +24,10 @@ export function AssessmentBuilder({ assessmentId, assessment }: AssessmentBuilde
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [isAddQuestionOpen, setIsAddQuestionOpen] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewData, setPreviewData] = useState<any>(null);
+  const [editingQuestion, setEditingQuestion] = useState<any>(null);
+  const [isEditQuestionOpen, setIsEditQuestionOpen] = useState(false);
   
   const [newQuestion, setNewQuestion] = useState({
     type: "multiple_choice",
@@ -49,6 +53,7 @@ export function AssessmentBuilder({ assessmentId, assessment }: AssessmentBuilde
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/protected/assessments", assessmentId, "questions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/protected/assessments", assessmentId] });
       setIsAddQuestionOpen(false);
       setNewQuestion({
         type: "multiple_choice",
@@ -71,6 +76,177 @@ export function AssessmentBuilder({ assessmentId, assessment }: AssessmentBuilde
       });
     },
   });
+
+  const publishMutation = useMutation({
+    mutationFn: async () => {
+      const response = await authenticatedApiRequest("POST", `/api/protected/assessments/${assessmentId}/publish`);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/protected/assessments", assessmentId] });
+      toast({
+        title: assessment.status === "published" ? "Assessment unpublished!" : "Assessment published!",
+        description: assessment.status === "published" 
+          ? "Your assessment is now in draft mode." 
+          : "Your assessment is now live for students.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to update assessment",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const previewMutation = useMutation({
+    mutationFn: async () => {
+      const response = await authenticatedApiRequest("GET", `/api/protected/assessments/${assessmentId}/preview`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setPreviewData(data);
+      setIsPreviewOpen(true);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to load preview",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateQuestionMutation = useMutation({
+    mutationFn: async ({ questionId, questionData }: { questionId: string, questionData: any }) => {
+      const response = await authenticatedApiRequest("PUT", `/api/protected/questions/${questionId}`, questionData);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/protected/assessments", assessmentId, "questions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/protected/assessments", assessmentId] });
+      setIsEditQuestionOpen(false);
+      setEditingQuestion(null);
+      toast({
+        title: "Question updated!",
+        description: "Your question has been updated successfully.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to update question",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteQuestionMutation = useMutation({
+    mutationFn: async (questionId: string) => {
+      const response = await authenticatedApiRequest("DELETE", `/api/protected/questions/${questionId}`);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/protected/assessments", assessmentId, "questions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/protected/assessments", assessmentId] });
+      toast({
+        title: "Question deleted!",
+        description: "Your question has been deleted successfully.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to delete question",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handlePublish = () => {
+    publishMutation.mutate();
+  };
+
+  const handlePreview = () => {
+    previewMutation.mutate();
+  };
+
+  const handleEditQuestion = (question: any) => {
+    // Parse options if they exist
+    let options = [];
+    if (question.options) {
+      try {
+        options = typeof question.options === 'string' ? JSON.parse(question.options) : question.options;
+      } catch (e) {
+        options = [];
+      }
+    }
+
+    setEditingQuestion({
+      ...question,
+      options: question.type === "multiple_choice" ? options : []
+    });
+    setIsEditQuestionOpen(true);
+  };
+
+  const handleDeleteQuestion = (questionId: string) => {
+    if (window.confirm("Are you sure you want to delete this question?")) {
+      deleteQuestionMutation.mutate(questionId);
+    }
+  };
+
+  const handleUpdateQuestion = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!editingQuestion) return;
+
+    // Validate question data
+    if (!editingQuestion.questionText.trim()) {
+      toast({
+        title: "Question text required",
+        description: "Please enter the question text.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!editingQuestion.correctAnswer.trim()) {
+      toast({
+        title: "Correct answer required",
+        description: "Please specify the correct answer.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Prepare question data
+    let questionData = { ...editingQuestion };
+
+    // Handle different question types
+    if (editingQuestion.type === "multiple_choice") {
+      const validOptions = editingQuestion.options.filter((option: string) => option.trim() !== "");
+      if (validOptions.length < 2) {
+        toast({
+          title: "Insufficient options",
+          description: "Multiple choice questions need at least 2 options.",
+          variant: "destructive",
+        });
+        return;
+      }
+      questionData.options = validOptions;
+    } else if (editingQuestion.type === "true_false") {
+      questionData.options = ["True", "False"];
+    } else {
+      // For short_answer and fill_blank, no options needed
+      delete questionData.options;
+    }
+
+    updateQuestionMutation.mutate({ 
+      questionId: editingQuestion.id, 
+      questionData 
+    });
+  };
 
   const handleAddQuestion = (e: React.FormEvent) => {
     e.preventDefault();
@@ -116,7 +292,7 @@ export function AssessmentBuilder({ assessmentId, assessment }: AssessmentBuilde
       questionData.options = ["True", "False"];
     } else {
       // For short_answer and fill_blank, no options needed
-      questionData.options = null;
+      delete questionData.options;
     }
 
     addQuestionMutation.mutate(questionData);
@@ -386,6 +562,186 @@ export function AssessmentBuilder({ assessmentId, assessment }: AssessmentBuilde
         </Dialog>
       </div>
 
+      {/* Edit Question Dialog */}
+      <Dialog open={isEditQuestionOpen} onOpenChange={setIsEditQuestionOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Question</DialogTitle>
+            <DialogDescription>
+              Update the question details
+            </DialogDescription>
+          </DialogHeader>
+          {editingQuestion && (
+            <form onSubmit={handleUpdateQuestion} className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="edit-question-type">Question Type</Label>
+                  <Select 
+                    value={editingQuestion.type} 
+                    onValueChange={(type) => setEditingQuestion(prev => ({
+                      ...prev,
+                      type,
+                      options: type === "multiple_choice" ? (prev.options.length > 0 ? prev.options : ["", "", "", ""]) : [],
+                      correctAnswer: "",
+                    }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select question type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="multiple_choice">Multiple Choice</SelectItem>
+                      <SelectItem value="true_false">True/False</SelectItem>
+                      <SelectItem value="short_answer">Short Answer</SelectItem>
+                      <SelectItem value="fill_blank">Fill in the Blank</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="edit-points">Points</Label>
+                  <Input
+                    id="edit-points"
+                    type="number"
+                    min="1"
+                    value={editingQuestion.points}
+                    onChange={(e) => setEditingQuestion(prev => ({ ...prev, points: parseInt(e.target.value) }))}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="edit-question-text">Question Text</Label>
+                <Textarea
+                  id="edit-question-text"
+                  value={editingQuestion.questionText}
+                  onChange={(e) => setEditingQuestion(prev => ({ ...prev, questionText: e.target.value }))}
+                  placeholder="Enter your question"
+                  rows={3}
+                  required
+                />
+              </div>
+
+              {/* Multiple Choice Options */}
+              {editingQuestion.type === "multiple_choice" && (
+                <div>
+                  <div className="flex justify-between items-center mb-3">
+                    <Label>Answer Options</Label>
+                    <Button 
+                      type="button" 
+                      variant="outline" 
+                      size="sm"
+                      onClick={() => {
+                        if (editingQuestion.options.length < 6) {
+                          setEditingQuestion(prev => ({
+                            ...prev,
+                            options: [...prev.options, ""],
+                          }));
+                        }
+                      }}
+                      disabled={editingQuestion.options.length >= 6}
+                    >
+                      <Plus className="w-4 h-4 mr-1" />
+                      Add Option
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {editingQuestion.options.map((option: string, index: number) => (
+                      <div key={index} className="flex items-center space-x-2">
+                        <span className="text-sm font-medium w-6">{String.fromCharCode(65 + index)}.</span>
+                        <Input
+                          value={option}
+                          onChange={(e) => setEditingQuestion(prev => ({
+                            ...prev,
+                            options: prev.options.map((opt: string, i: number) => i === index ? e.target.value : opt),
+                          }))}
+                          placeholder={`Option ${String.fromCharCode(65 + index)}`}
+                          className="flex-1"
+                        />
+                        {editingQuestion.options.length > 2 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setEditingQuestion(prev => ({
+                              ...prev,
+                              options: prev.options.filter((_: string, i: number) => i !== index),
+                              correctAnswer: prev.correctAnswer === prev.options[index] ? "" : prev.correctAnswer,
+                            }))}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Correct Answer */}
+              <div>
+                <Label htmlFor="edit-correct-answer">Correct Answer</Label>
+                {editingQuestion.type === "multiple_choice" ? (
+                  <Select 
+                    value={editingQuestion.correctAnswer} 
+                    onValueChange={(value) => setEditingQuestion(prev => ({ ...prev, correctAnswer: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select correct answer" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {editingQuestion.options
+                        .filter((option: string) => option.trim() !== "")
+                        .map((option: string, index: number) => (
+                          <SelectItem key={index} value={option}>
+                            {String.fromCharCode(65 + index)}. {option}
+                          </SelectItem>
+                        ))
+                      }
+                    </SelectContent>
+                  </Select>
+                ) : editingQuestion.type === "true_false" ? (
+                  <Select 
+                    value={editingQuestion.correctAnswer} 
+                    onValueChange={(value) => setEditingQuestion(prev => ({ ...prev, correctAnswer: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select correct answer" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="true">True</SelectItem>
+                      <SelectItem value="false">False</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    id="edit-correct-answer"
+                    value={editingQuestion.correctAnswer}
+                    onChange={(e) => setEditingQuestion(prev => ({ ...prev, correctAnswer: e.target.value }))}
+                    placeholder="Enter the correct answer"
+                    required
+                  />
+                )}
+              </div>
+
+              <div className="flex justify-end space-x-2">
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  onClick={() => setIsEditQuestionOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  type="submit" 
+                  disabled={updateQuestionMutation.isPending}
+                >
+                  {updateQuestionMutation.isPending ? "Updating..." : "Update Question"}
+                </Button>
+              </div>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Questions Display */}
       {questions.length === 0 ? (
         <Card>
@@ -417,10 +773,20 @@ export function AssessmentBuilder({ assessmentId, assessment }: AssessmentBuilde
                     </span>
                   </div>
                   <div className="flex space-x-2">
-                    <Button variant="ghost" size="sm" data-testid={`button-edit-question-${question.id}`}>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={() => handleEditQuestion(question)}
+                      data-testid={`button-edit-question-${question.id}`}
+                    >
                       <Edit className="w-4 h-4" />
                     </Button>
-                    <Button variant="ghost" size="sm" data-testid={`button-delete-question-${question.id}`}>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={() => handleDeleteQuestion(question.id)}
+                      data-testid={`button-delete-question-${question.id}`}
+                    >
                       <Trash2 className="w-4 h-4" />
                     </Button>
                   </div>
@@ -481,20 +847,107 @@ export function AssessmentBuilder({ assessmentId, assessment }: AssessmentBuilde
                 </p>
               </div>
               <div className="flex space-x-2">
-                <Button variant="outline" data-testid="button-preview-assessment">
-                  Preview
+                <Button 
+                  variant="outline" 
+                  onClick={handlePreview}
+                  disabled={previewMutation.isPending}
+                  data-testid="button-preview-assessment"
+                >
+                  {previewMutation.isPending ? "Loading..." : "Preview"}
                 </Button>
                 <Button 
                   variant={assessment.status === "published" ? "secondary" : "default"}
+                  onClick={handlePublish}
+                  disabled={publishMutation.isPending}
                   data-testid="button-publish-assessment"
                 >
-                  {assessment.status === "published" ? "Unpublish" : "Publish"}
+                  {publishMutation.isPending 
+                    ? "Updating..." 
+                    : (assessment.status === "published" ? "Unpublish" : "Publish")
+                  }
                 </Button>
               </div>
             </div>
           </CardContent>
         </Card>
       )}
+
+      {/* Preview Dialog */}
+      <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Assessment Preview</DialogTitle>
+            <DialogDescription>
+              This is how students will see your assessment
+            </DialogDescription>
+          </DialogHeader>
+          
+          {previewData && (
+            <div className="space-y-6">
+              {/* Assessment Info */}
+              <div className="border-b pb-4">
+                <h2 className="text-2xl font-bold">{previewData.assessment.title}</h2>
+                {previewData.assessment.description && (
+                  <p className="text-muted-foreground mt-2">{previewData.assessment.description}</p>
+                )}
+                <div className="flex items-center space-x-4 mt-4 text-sm text-muted-foreground">
+                  <span>{previewData.questions.length} questions</span>
+                  <span>{previewData.assessment.totalPoints} total points</span>
+                  {previewData.assessment.timeLimit && (
+                    <span>{previewData.assessment.timeLimit} minute time limit</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Questions */}
+              <div className="space-y-6">
+                {previewData.questions.map((question: any, index: number) => (
+                  <div key={question.id} className="border rounded-lg p-4">
+                    <div className="flex justify-between items-start mb-4">
+                      <h3 className="text-lg font-medium">
+                        Question {index + 1}
+                      </h3>
+                      <Badge variant="outline">{question.points} points</Badge>
+                    </div>
+                    
+                    <p className="mb-4">{question.questionText}</p>
+                    
+                    {question.type === "multiple_choice" && question.options && (
+                      <div className="space-y-2">
+                        {question.options.map((option: string, optionIndex: number) => (
+                          <div key={optionIndex} className="flex items-center space-x-2">
+                            <Circle className="w-4 h-4" />
+                            <span>{String.fromCharCode(65 + optionIndex)}. {option}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {question.type === "true_false" && (
+                      <div className="space-y-2">
+                        <div className="flex items-center space-x-2">
+                          <Circle className="w-4 h-4" />
+                          <span>True</span>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Circle className="w-4 h-4" />
+                          <span>False</span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {(question.type === "short_answer" || question.type === "fill_blank") && (
+                      <div className="border rounded p-2 bg-muted/50">
+                        <span className="text-muted-foreground">Student answer will appear here</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

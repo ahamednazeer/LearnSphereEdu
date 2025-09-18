@@ -1,15 +1,26 @@
-import { Pool, neonConfig } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-serverless';
-import ws from "ws";
-import * as schema from "@shared/schema";
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import Database from 'better-sqlite3';
+import * as schema from '@shared/schema';
+import { mkdirSync } from 'fs';
+import { dirname } from 'path';
 
-neonConfig.webSocketConstructor = ws;
-
-if (!process.env.DATABASE_URL) {
-  throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision a database?",
-  );
+// Parse DATABASE_URL to handle file:// URLs
+function parseDatabaseUrl(url: string): string {
+  if (url.startsWith('file:')) {
+    return url.replace('file:', '');
+  }
+  return url;
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-export const db = drizzle({ client: pool, schema });
+const dbFile = parseDatabaseUrl(process.env.DATABASE_URL || './db.sqlite');
+
+// Ensure the directory exists
+const dbDir = dirname(dbFile);
+try {
+  mkdirSync(dbDir, { recursive: true });
+} catch (error) {
+  // Directory might already exist, ignore error
+}
+
+const sqlite = new Database(dbFile);
+export const db = drizzle(sqlite, { schema });

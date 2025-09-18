@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { authenticatedApiRequest } from "@/lib/auth";
-import { useLocation, useSearch } from "wouter";
+import { useLocation, useSearch, useRoute } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,7 @@ export default function Discussions() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
   const searchParams = useSearch();
+  const [match] = useRoute("/discussions/create");
   const { toast } = useToast();
   const queryClient = useQueryClient();
   
@@ -37,6 +38,7 @@ export default function Discussions() {
 
   // Parse courseId from URL params if creating from course detail
   const courseIdFromUrl = new URLSearchParams(searchParams).get('courseId');
+  const isCreateRoute = match;
 
   const { data: courses = [], isLoading: coursesLoading } = useQuery({
     queryKey: ["/api/protected/courses"],
@@ -78,6 +80,9 @@ export default function Discussions() {
       queryClient.invalidateQueries({ queryKey: ["/api/protected/discussions"] });
       setIsCreateDialogOpen(false);
       setNewDiscussion({ title: "", description: "", courseId: "" });
+      if (isCreateRoute) {
+        setLocation('/discussions');
+      }
       toast({
         title: "Discussion created!",
         description: "Your discussion topic has been posted.",
@@ -128,11 +133,23 @@ export default function Discussions() {
       discussion.courseName.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
-  // Set initial course from URL if available
-  if (courseIdFromUrl && !newDiscussion.courseId && courses.length > 0) {
-    setNewDiscussion(prev => ({ ...prev, courseId: courseIdFromUrl }));
-    setIsCreateDialogOpen(true);
-  }
+  // Set initial course from URL if available and handle create route
+  useEffect(() => {
+    if (isCreateRoute) {
+      setIsCreateDialogOpen(true);
+      if (courseIdFromUrl && courses.length > 0) {
+        setNewDiscussion(prev => ({ ...prev, courseId: courseIdFromUrl }));
+      }
+    }
+  }, [isCreateRoute, courseIdFromUrl, courses.length]);
+
+  // Handle dialog close to navigate back to discussions
+  const handleDialogClose = (open: boolean) => {
+    setIsCreateDialogOpen(open);
+    if (!open && isCreateRoute) {
+      setLocation('/discussions');
+    }
+  };
 
   if (coursesLoading || discussionsLoading) {
     return (
@@ -152,7 +169,7 @@ export default function Discussions() {
           </p>
         </div>
         
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <Dialog open={isCreateDialogOpen} onOpenChange={handleDialogClose}>
           <DialogTrigger asChild>
             <Button data-testid="button-create-discussion">
               <Plus className="w-4 h-4 mr-2" />
@@ -211,7 +228,7 @@ export default function Discussions() {
                 <Button 
                   type="button" 
                   variant="outline" 
-                  onClick={() => setIsCreateDialogOpen(false)}
+                  onClick={() => handleDialogClose(false)}
                   data-testid="button-cancel-discussion"
                 >
                   Cancel

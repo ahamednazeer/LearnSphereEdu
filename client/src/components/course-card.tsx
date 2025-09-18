@@ -95,9 +95,10 @@ export function CourseCard({
           {course.title}
         </h3>
         
-        <p className="text-muted-foreground text-sm mb-4 line-clamp-2">
-          {course.description}
-        </p>
+        <div 
+          className="text-muted-foreground text-sm mb-4 line-clamp-2 prose prose-sm max-w-none dark:prose-invert"
+          dangerouslySetInnerHTML={{ __html: course.description }}
+        />
 
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center text-sm text-muted-foreground">

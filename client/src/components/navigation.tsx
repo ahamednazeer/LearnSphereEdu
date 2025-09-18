@@ -1,13 +1,19 @@
+import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { BookOpen, Bell, Settings, User, LogOut } from "lucide-react";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Badge } from "@/components/ui/badge";
+import { BookOpen, Bell, Settings, User, LogOut, Menu, X } from "lucide-react";
+import { NotificationPanel } from "@/components/ui/notification-panel";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 export default function Navigation() {
   const { user, logout } = useAuth();
   const [location, setLocation] = useLocation();
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const handleLogout = () => {
     logout();
@@ -20,6 +26,11 @@ export default function Navigation() {
     { name: "Assessments", path: "/assessments" },
     { name: "Discussions", path: "/discussions" },
   ];
+
+  const handleNavigation = (path: string) => {
+    setLocation(path);
+    setIsMobileMenuOpen(false);
+  };
 
   return (
     <nav className="bg-card border-b border-border shadow-sm sticky top-0 z-50">
@@ -38,7 +49,7 @@ export default function Navigation() {
               {navigationItems.map((item) => (
                 <button
                   key={item.path}
-                  onClick={() => setLocation(item.path)}
+                  onClick={() => handleNavigation(item.path)}
                   className={`${
                     location === item.path
                       ? "text-primary border-b-2 border-primary"
@@ -53,11 +64,62 @@ export default function Navigation() {
           </div>
           
           <div className="flex items-center space-x-4">
+            {/* Mobile menu button */}
+            <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
+              <SheetTrigger asChild>
+                <Button variant="ghost" size="icon" className="md:hidden">
+                  <Menu className="w-5 h-5" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left" className="w-64">
+                <div className="flex flex-col space-y-4 mt-8">
+                  <div className="flex items-center space-x-3 pb-4 border-b">
+                    <Avatar className="w-10 h-10">
+                      <AvatarImage src={user?.profileImage} />
+                      <AvatarFallback>
+                        {user?.firstName?.[0]}{user?.lastName?.[0]}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p className="font-medium">{user?.firstName} {user?.lastName}</p>
+                      <p className="text-sm text-muted-foreground capitalize">{user?.role}</p>
+                    </div>
+                  </div>
+                  
+                  {navigationItems.map((item) => (
+                    <Button
+                      key={item.path}
+                      variant={location === item.path ? "default" : "ghost"}
+                      className="justify-start"
+                      onClick={() => handleNavigation(item.path)}
+                    >
+                      {item.name}
+                    </Button>
+                  ))}
+                  
+                  <div className="pt-4 border-t space-y-2">
+                    <Button variant="ghost" className="justify-start w-full" onClick={() => handleNavigation("/profile")}>
+                      <User className="mr-2 h-4 w-4" />
+                      Profile
+                    </Button>
+                    <Button variant="ghost" className="justify-start w-full">
+                      <Settings className="mr-2 h-4 w-4" />
+                      Settings
+                    </Button>
+                    <Button variant="ghost" className="justify-start w-full text-destructive" onClick={handleLogout}>
+                      <LogOut className="mr-2 h-4 w-4" />
+                      Log out
+                    </Button>
+                  </div>
+                </div>
+              </SheetContent>
+            </Sheet>
+
+            {/* Theme Toggle */}
+            <ThemeToggle />
+            
             {/* Notifications */}
-            <Button variant="ghost" size="icon" className="relative" data-testid="button-notifications">
-              <Bell className="w-5 h-5" />
-              <span className="absolute top-1 right-1 w-2 h-2 bg-destructive rounded-full"></span>
-            </Button>
+            <NotificationPanel />
             
             {/* User Profile */}
             <DropdownMenu>

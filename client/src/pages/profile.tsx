@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { authenticatedApiRequest } from "@/lib/auth";
+import { sessionManager } from "@/lib/sessionManager";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,10 +11,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { 
   User, Mail, Calendar, BookOpen, GraduationCap, 
-  Settings, Camera, Save, Shield 
+  Settings, Camera, Save, Shield, Monitor, Smartphone, 
+  MapPin, Clock, X
 } from "lucide-react";
 
 export default function Profile() {
@@ -22,6 +25,7 @@ export default function Profile() {
   const queryClient = useQueryClient();
   
   const [isEditing, setIsEditing] = useState(false);
+  const [isSessionDialogOpen, setIsSessionDialogOpen] = useState(false);
   const [profileData, setProfileData] = useState({
     firstName: user?.firstName || "",
     lastName: user?.lastName || "",
@@ -53,6 +57,15 @@ export default function Profile() {
     },
   });
 
+  const { data: sessions = [], refetch: refetchSessions } = useQuery({
+    queryKey: ["/api/protected/user/sessions"],
+    queryFn: async () => {
+      const response = await authenticatedApiRequest("GET", "/api/protected/user/sessions");
+      return response.json();
+    },
+    enabled: isSessionDialogOpen,
+  });
+
   const updateProfileMutation = useMutation({
     mutationFn: async (data: any) => {
       const response = await authenticatedApiRequest("PUT", "/api/protected/user/profile", data);
@@ -75,9 +88,70 @@ export default function Profile() {
     },
   });
 
+  const terminateSessionMutation = useMutation({
+    mutationFn: async (sessionId: string) => {
+      await sessionManager.terminateSession(sessionId);
+    },
+    onSuccess: () => {
+      refetchSessions();
+      toast({
+        title: "Session terminated",
+        description: "The session has been successfully terminated.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to terminate session",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const logoutAllMutation = useMutation({
+    mutationFn: async () => {
+      await sessionManager.logoutAll();
+    },
+    onSuccess: () => {
+      toast({
+        title: "All sessions terminated",
+        description: "You have been logged out from all devices.",
+      });
+      // The user will be redirected to login automatically
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to logout from all sessions",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
     updateProfileMutation.mutate(profileData);
+  };
+
+  const getDeviceIcon = (userAgent: string) => {
+    if (userAgent.includes('Mobile') || userAgent.includes('Android') || userAgent.includes('iPhone')) {
+      return <Smartphone className="w-4 h-4" />;
+    }
+    return <Monitor className="w-4 h-4" />;
+  };
+
+  const formatLastActive = (timestamp: number) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / (1000 * 60));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffMins < 1) return "Active now";
+    if (diffMins < 60) return `${diffMins} minutes ago`;
+    if (diffHours < 24) return `${diffHours} hours ago`;
+    return `${diffDays} days ago`;
   };
 
   const getRoleBadge = (role: string) => {
@@ -377,6 +451,87 @@ export default function Profile() {
                 <Button variant="outline" size="sm" data-testid="button-privacy-settings">
                   Manage
                 </Button>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-medium text-foreground">Active Sessions</h4>
+                  <p className="text-sm text-muted-foreground">
+                    Manage your active login sessions across devices
+                  </p>
+                </div>
+                <Dialog open={isSessionDialogOpen} onOpenChange={setIsSessionDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" size="sm" data-testid="button-manage-sessions">
+                      Manage
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-2xl">
+                    <DialogHeader>
+                      <DialogTitle>Active Sessions</DialogTitle>
+                      <DialogDescription>
+                        These are the devices currently logged into your account. You can terminate any session you don't recognize.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 max-h-96 overflow-y-auto">
+                      {sessions.map((session: any) => (
+                        <div key={session.id} className="flex items-center justify-between p-4 border border-border rounded-lg">
+                          <div className="flex items-center space-x-3">
+                            {getDeviceIcon(session.userAgent || "")}
+                            <div>
+                              <div className="flex items-center space-x-2">
+                                <p className="text-sm font-medium">
+                                  {session.userAgent?.includes('Mobile') ? 'Mobile Device' : 'Desktop'}
+                                </p>
+                                {session.isCurrent && (
+                                  <Badge variant="default" className="text-xs">Current</Badge>
+                                )}
+                              </div>
+                              <div className="flex items-center space-x-4 text-xs text-muted-foreground">
+                                <div className="flex items-center space-x-1">
+                                  <MapPin className="w-3 h-3" />
+                                  <span>{session.ipAddress || 'Unknown location'}</span>
+                                </div>
+                                <div className="flex items-center space-x-1">
+                                  <Clock className="w-3 h-3" />
+                                  <span>{formatLastActive(session.lastActivity || session.createdAt)}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          {!session.isCurrent && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => terminateSessionMutation.mutate(session.id)}
+                              disabled={terminateSessionMutation.isPending}
+                            >
+                              <X className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
+                      ))}
+                      {sessions.length === 0 && (
+                        <div className="text-center py-8 text-muted-foreground">
+                          <Monitor className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                          <p>No active sessions found</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex justify-between pt-4 border-t">
+                      <Button
+                        variant="destructive"
+                        onClick={() => logoutAllMutation.mutate()}
+                        disabled={logoutAllMutation.isPending}
+                      >
+                        {logoutAllMutation.isPending ? "Logging out..." : "Logout All Devices"}
+                      </Button>
+                      <Button variant="outline" onClick={() => setIsSessionDialogOpen(false)}>
+                        Close
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
               </div>
 
               <div className="flex items-center justify-between">

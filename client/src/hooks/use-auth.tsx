@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { apiRequest } from "@/lib/queryClient";
+import { sessionManager } from "@/lib/sessionManager";
 
 interface User {
   id: string;
@@ -24,38 +24,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem("authToken");
-    if (token) {
-      // Verify token and get user info
-      fetchUserProfile()
-        .catch(() => {
-          localStorage.removeItem("authToken");
-        })
-        .finally(() => {
-          setIsLoading(false);
-        });
-    } else {
-      setIsLoading(false);
+    // Check if user is already authenticated via sessionManager
+    const currentUser = sessionManager.getCurrentUser();
+    if (currentUser) {
+      setUser(currentUser);
     }
+    setIsLoading(false);
   }, []);
-
-  const fetchUserProfile = async () => {
-    try {
-      const response = await apiRequest("GET", "/api/protected/user/profile");
-      const userData = await response.json();
-      setUser(userData);
-    } catch (error) {
-      throw error;
-    }
-  };
 
   const login = async (email: string, password: string) => {
     try {
-      const response = await apiRequest("POST", "/api/auth/login", { email, password });
-      const data = await response.json();
-      
-      localStorage.setItem("authToken", data.token);
-      setUser(data.user);
+      const userData = await sessionManager.login(email, password);
+      setUser(userData);
     } catch (error: any) {
       throw new Error(error.message || "Login failed");
     }
@@ -63,18 +43,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const register = async (userData: any) => {
     try {
-      const response = await apiRequest("POST", "/api/auth/register", userData);
+      // For registration, we'll still use the old API since sessionManager doesn't have register
+      const response = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(userData),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error || "Registration failed");
+      }
+
       const data = await response.json();
       
-      localStorage.setItem("authToken", data.token);
+      // Store tokens using sessionManager format
+      localStorage.setItem("accessToken", data.accessToken);
+      localStorage.setItem("refreshToken", data.refreshToken);
+      localStorage.setItem("user", JSON.stringify(data.user));
+      
       setUser(data.user);
     } catch (error: any) {
       throw new Error(error.message || "Registration failed");
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem("authToken");
+  const logout = async () => {
+    try {
+      await sessionManager.logout();
+    } catch (error) {
+      console.error("Logout error:", error);
+    }
     setUser(null);
   };
 

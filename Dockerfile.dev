@@ -1,0 +1,29 @@
+# Development Dockerfile for LearnSphereEdu
+FROM node:18-alpine
+
+# Install system dependencies
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    ffmpeg \
+    libc6-compat
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+
+# Install all dependencies (including dev dependencies)
+RUN npm ci
+
+# Create directories
+RUN mkdir -p uploads/materials uploads/thumbnails data
+
+# Copy source code
+COPY . .
+
+EXPOSE 5000 5173
+
+# Default command for development
+CMD ["npm", "run", "dev"]

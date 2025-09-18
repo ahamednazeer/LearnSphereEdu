@@ -1,36 +1,25 @@
 import { apiRequest } from "./queryClient";
+import { sessionManager } from "./sessionManager";
 
-// Enhanced API request function that includes auth token
+// Enhanced API request function that includes auth token with automatic refresh
 export async function authenticatedApiRequest(
   method: string,
   url: string,
   data?: unknown
 ): Promise<Response> {
-  const token = localStorage.getItem("authToken");
-  
-  const headers: Record<string, string> = data ? { "Content-Type": "application/json" } : {};
-  
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: data ? JSON.stringify(data) : undefined,
-    credentials: "include",
-  });
-
-  if (!res.ok) {
-    if (res.status === 401) {
-      // Token expired or invalid, redirect to login
-      localStorage.removeItem("authToken");
-      window.location.href = "/login";
-      throw new Error("Authentication required");
-    }
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
-  }
-
-  return res;
+  return sessionManager.authenticatedRequest(method, url, data);
 }
+
+// Legacy support - migrate existing localStorage token to new system
+function migrateLegacyToken() {
+  const legacyToken = localStorage.getItem("authToken");
+  if (legacyToken && !localStorage.getItem("accessToken")) {
+    // For now, just remove the legacy token
+    // In a real migration, you might want to validate it first
+    localStorage.removeItem("authToken");
+    console.log("Legacy token removed. Please log in again.");
+  }
+}
+
+// Run migration on module load
+migrateLegacyToken();
