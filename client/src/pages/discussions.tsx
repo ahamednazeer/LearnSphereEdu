@@ -49,61 +49,117 @@ export default function Discussions() {
   });
 
   const { data: allDiscussions = [], isLoading: discussionsLoading } = useQuery({
-    queryKey: ["/api/protected/discussions"],
+    queryKey: ["/api/protected/discussions", courses.map(c => c.id).sort()],
     queryFn: async () => {
-      console.log('Fetching discussions for courses:', courses.map(c => ({ id: c.id, title: c.title })));
+      console.log(`[Discussions Page] Fetching discussions for ${courses.length} courses`);
       // Get discussions from all enrolled/taught courses
       const coursePromises = courses.map((course: any) => 
         authenticatedApiRequest("GET", `/api/protected/courses/${course.id}/discussions`)
           .then(response => response.json())
           .then(discussions => {
-            console.log(`Discussions for course ${course.title}:`, discussions);
+            console.log(`[Discussions Page] Course ${course.id} (${course.title}): ${discussions.length} discussions`);
             return discussions.map((discussion: any) => ({
               ...discussion,
               courseName: course.title,
               courseSubject: course.subject,
             }));
           })
+          .catch(error => {
+            console.error(`Failed to fetch discussions for course ${course.id}:`, error);
+            return []; // Return empty array on error to prevent Promise.all from failing
+          })
       );
       const discussionArrays = await Promise.all(coursePromises);
       const allDiscussions = discussionArrays.flat();
-      console.log('All discussions fetched:', allDiscussions);
+      console.log(`[Discussions Page] Total discussions fetched: ${allDiscussions.length}`);
       return allDiscussions;
     },
     enabled: courses.length > 0,
+    staleTime: 30000, // Consider data fresh for 30 seconds
+    refetchOnWindowFocus: true, // Refetch when window regains focus
   });
 
   const createDiscussionMutation = useMutation({
     mutationFn: async (discussionData: any) => {
-      console.log('Creating discussion:', discussionData);
       const { courseId, ...data } = discussionData;
       const payload = {
         ...data,
         createdBy: user?.id,
       };
-      console.log('Discussion payload:', payload);
       
       const response = await authenticatedApiRequest("POST", `/api/protected/courses/${courseId}/discussions`, payload);
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ message: 'Failed to create discussion' }));
-        console.error('Discussion creation failed:', errorData);
         throw new Error(errorData.message || 'Failed to create discussion');
       }
       
-      const result = await response.json();
-      console.log('Discussion created successfully:', result);
-      return result;
+      return response.json();
     },
-    onSuccess: (newDiscussion) => {
-      // Invalidate both the general discussions query and course-specific queries
-      queryClient.invalidateQueries({ queryKey: ["/api/protected/discussions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/protected/courses"] });
+    onSuccess: async (newDiscussion, variables) => {
+      // Get courseId from the variables (the data that was sent to create the discussion)
+      const courseId = variables.courseId || newDiscussion.courseId;
+      console.log(`[Discussions Page] Discussion created successfully:`, { 
+        id: newDiscussion.id, 
+        title: newDiscussion.title, 
+        courseId 
+      });
       
-      // Force refetch of discussions after a short delay to ensure the new discussion appears
-      setTimeout(() => {
-        queryClient.refetchQueries({ queryKey: ["/api/protected/discussions"] });
-      }, 100);
+      try {
+        // Invalidate all discussion-related queries
+        await Promise.all([
+          // Invalidate all discussions queries (including different course combinations)
+          queryClient.invalidateQueries({ 
+            predicate: (query) => {
+              const queryKey = query.queryKey as string[];
+              return queryKey.length >= 1 && queryKey[0] === "/api/protected/discussions";
+            }
+          }),
+          // Invalidate the courses query (which the discussions query depends on)
+          queryClient.invalidateQueries({ queryKey: ["/api/protected/courses"] }),
+          // Invalidate the specific course's discussions query
+          courseId ? queryClient.invalidateQueries({ 
+            queryKey: ["/api/protected/courses", courseId, "discussions"] 
+          }) : Promise.resolve(),
+          // Invalidate any queries that start with the course discussions pattern
+          queryClient.invalidateQueries({ 
+            predicate: (query) => {
+              const queryKey = query.queryKey as string[];
+              return queryKey.length >= 3 && 
+                     queryKey[0] === "/api/protected/courses" && 
+                     queryKey[2] === "discussions";
+            }
+          })
+        ]);
+
+        // Force refetch of critical queries to ensure immediate updates
+        await Promise.all([
+          queryClient.refetchQueries({ 
+            predicate: (query) => {
+              const queryKey = query.queryKey as string[];
+              return queryKey.length >= 1 && queryKey[0] === "/api/protected/discussions";
+            }
+          }),
+          courseId ? queryClient.refetchQueries({ 
+            queryKey: ["/api/protected/courses", courseId, "discussions"] 
+          }) : Promise.resolve(),
+          // Also refetch the courses query to ensure fresh data
+          queryClient.refetchQueries({ queryKey: ["/api/protected/courses"] })
+        ]);
+
+        // Additional aggressive cache clearing for discussions
+        queryClient.removeQueries({ 
+          predicate: (query) => {
+            const queryKey = query.queryKey as string[];
+            return queryKey.length >= 1 && queryKey[0] === "/api/protected/discussions";
+          }
+        });
+        
+        console.log(`[Discussions Page] Query invalidation completed for discussion ${newDiscussion.id}`);
+      } catch (error) {
+        console.error("Error invalidating queries after discussion creation:", error);
+        // Continue with the success flow even if query invalidation fails
+      }
       
       setIsCreateDialogOpen(false);
       setNewDiscussion({ title: "", description: "", courseId: "" });

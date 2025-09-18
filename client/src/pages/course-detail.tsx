@@ -321,6 +321,12 @@ export default function CourseDetail() {
     content: "",
   });
 
+  const [isCreateDiscussionDialogOpen, setIsCreateDiscussionDialogOpen] = useState(false);
+  const [newDiscussion, setNewDiscussion] = useState({
+    title: "",
+    description: "",
+  });
+
   const courseId = params?.id;
 
   const { data: course, isLoading: courseLoading } = useQuery({
@@ -353,10 +359,19 @@ export default function CourseDetail() {
   const { data: discussions = [], isLoading: discussionsLoading } = useQuery({
     queryKey: ["/api/protected/courses", courseId, "discussions"],
     queryFn: async () => {
+      console.log(`[Course Detail] Fetching discussions for course ${courseId}`);
       const response = await authenticatedApiRequest("GET", `/api/protected/courses/${courseId}/discussions`);
-      return response.json();
+      if (!response.ok) {
+        throw new Error(`Failed to fetch discussions: ${response.status}`);
+      }
+      const data = await response.json();
+      console.log(`[Course Detail] Fetched ${data.length} discussions for course ${courseId}:`, data.map(d => ({ id: d.id, title: d.title })));
+      return data;
     },
     enabled: !!courseId,
+    staleTime: 30000, // Consider data fresh for 30 seconds
+    refetchOnWindowFocus: true, // Refetch when window regains focus
+    retry: 3, // Retry failed requests up to 3 times
   });
 
   const { data: modules = [], isLoading: modulesLoading } = useQuery({
@@ -401,6 +416,114 @@ export default function CourseDetail() {
       });
     },
   });
+
+  // Add a mutation to handle discussion creation from course detail page
+  const createDiscussionMutation = useMutation({
+    mutationFn: async (discussionData: any) => {
+      const payload = {
+        ...discussionData,
+        createdBy: user?.id,
+      };
+      
+      const response = await authenticatedApiRequest("POST", `/api/protected/courses/${courseId}/discussions`, payload);
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to create discussion' }));
+        throw new Error(errorData.message || 'Failed to create discussion');
+      }
+      
+      return response.json();
+    },
+    onSuccess: async (newDiscussion) => {
+      console.log(`[Course Detail] Discussion created successfully:`, { 
+        id: newDiscussion.id, 
+        title: newDiscussion.title, 
+        courseId 
+      });
+      
+      try {
+        // Invalidate all discussion-related queries
+        await Promise.all([
+          // Invalidate the main discussions query (used by discussions page)
+          queryClient.invalidateQueries({ queryKey: ["/api/protected/discussions"] }),
+          // Invalidate the courses query (which the discussions query depends on)
+          queryClient.invalidateQueries({ queryKey: ["/api/protected/courses"] }),
+          // Invalidate this course's discussions query
+          queryClient.invalidateQueries({ 
+            queryKey: ["/api/protected/courses", courseId, "discussions"] 
+          }),
+          // Invalidate any other course discussion queries
+          queryClient.invalidateQueries({ 
+            predicate: (query) => {
+              const queryKey = query.queryKey as string[];
+              return queryKey.length >= 3 && 
+                     queryKey[0] === "/api/protected/courses" && 
+                     queryKey[2] === "discussions";
+            }
+          })
+        ]);
+
+        // Force refetch to ensure immediate updates
+        await Promise.all([
+          queryClient.refetchQueries({ 
+            predicate: (query) => {
+              const queryKey = query.queryKey as string[];
+              return queryKey.length >= 1 && queryKey[0] === "/api/protected/discussions";
+            }
+          }),
+          queryClient.refetchQueries({ 
+            queryKey: ["/api/protected/courses", courseId, "discussions"] 
+          }),
+          // Also refetch the courses query to ensure fresh data
+          queryClient.refetchQueries({ queryKey: ["/api/protected/courses"] })
+        ]);
+
+        // Additional aggressive cache clearing for discussions
+        queryClient.removeQueries({ 
+          predicate: (query) => {
+            const queryKey = query.queryKey as string[];
+            return queryKey.length >= 1 && queryKey[0] === "/api/protected/discussions";
+          }
+        });
+        
+        console.log(`[Course Detail] Query invalidation completed for discussion ${newDiscussion.id}`);
+      } catch (error) {
+        console.error("Error invalidating queries after discussion creation:", error);
+      }
+      
+      // Reset dialog state
+      setIsCreateDiscussionDialogOpen(false);
+      setNewDiscussion({ title: "", description: "" });
+      
+      toast({
+        title: "Discussion created!",
+        description: "Your discussion topic has been posted.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to create discussion",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleCreateDiscussion = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!courseId) {
+      toast({
+        title: "Error",
+        description: "Course ID is missing.",
+        variant: "destructive",
+      });
+      return;
+    }
+    createDiscussionMutation.mutate({
+      ...newDiscussion,
+      courseId,
+    });
+  };
 
   const updateCourseMutation = useMutation({
     mutationFn: async (courseData: any) => {
@@ -978,10 +1101,63 @@ export default function CourseDetail() {
         <TabsContent value="discussions" className="space-y-6">
           <div className="flex justify-between items-center">
             <h2 className="text-2xl font-bold text-foreground">Discussions</h2>
-            <Button onClick={() => setLocation(`/discussions/create?courseId=${courseId}`)} data-testid="button-create-discussion">
-              <Plus className="w-4 h-4 mr-2" />
-              New Discussion
-            </Button>
+            <Dialog open={isCreateDiscussionDialogOpen} onOpenChange={setIsCreateDiscussionDialogOpen}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-create-discussion">
+                  <Plus className="w-4 h-4 mr-2" />
+                  New Discussion
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Start New Discussion</DialogTitle>
+                  <DialogDescription>
+                    Create a discussion topic for this course
+                  </DialogDescription>
+                </DialogHeader>
+                <form onSubmit={handleCreateDiscussion} className="space-y-4">
+                  <div>
+                    <Label htmlFor="title">Discussion Title</Label>
+                    <Input
+                      id="title"
+                      value={newDiscussion.title}
+                      onChange={(e) => setNewDiscussion(prev => ({ ...prev, title: e.target.value }))}
+                      placeholder="Enter discussion title"
+                      required
+                      data-testid="input-discussion-title"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="description">Description</Label>
+                    <Textarea
+                      id="description"
+                      value={newDiscussion.description}
+                      onChange={(e) => setNewDiscussion(prev => ({ ...prev, description: e.target.value }))}
+                      placeholder="Describe the discussion topic"
+                      rows={4}
+                      data-testid="textarea-discussion-description"
+                    />
+                  </div>
+                  <div className="flex justify-end space-x-2">
+                    <Button 
+                      type="button" 
+                      variant="outline" 
+                      onClick={() => setIsCreateDiscussionDialogOpen(false)}
+                      data-testid="button-cancel-discussion"
+                    >
+                      Cancel
+                    </Button>
+                    <Button 
+                      type="submit" 
+                      disabled={createDiscussionMutation.isPending}
+                      data-testid="button-submit-discussion"
+                    >
+                      {createDiscussionMutation.isPending ? "Creating..." : "Create Discussion"}
+                    </Button>
+                  </div>
+                </form>
+              </DialogContent>
+            </Dialog>
           </div>
           
           {discussionsLoading ? (
