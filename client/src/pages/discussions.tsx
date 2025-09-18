@@ -51,33 +51,60 @@ export default function Discussions() {
   const { data: allDiscussions = [], isLoading: discussionsLoading } = useQuery({
     queryKey: ["/api/protected/discussions"],
     queryFn: async () => {
+      console.log('Fetching discussions for courses:', courses.map(c => ({ id: c.id, title: c.title })));
       // Get discussions from all enrolled/taught courses
       const coursePromises = courses.map((course: any) => 
         authenticatedApiRequest("GET", `/api/protected/courses/${course.id}/discussions`)
           .then(response => response.json())
-          .then(discussions => discussions.map((discussion: any) => ({
-            ...discussion,
-            courseName: course.title,
-            courseSubject: course.subject,
-          })))
+          .then(discussions => {
+            console.log(`Discussions for course ${course.title}:`, discussions);
+            return discussions.map((discussion: any) => ({
+              ...discussion,
+              courseName: course.title,
+              courseSubject: course.subject,
+            }));
+          })
       );
       const discussionArrays = await Promise.all(coursePromises);
-      return discussionArrays.flat();
+      const allDiscussions = discussionArrays.flat();
+      console.log('All discussions fetched:', allDiscussions);
+      return allDiscussions;
     },
     enabled: courses.length > 0,
   });
 
   const createDiscussionMutation = useMutation({
     mutationFn: async (discussionData: any) => {
+      console.log('Creating discussion:', discussionData);
       const { courseId, ...data } = discussionData;
-      const response = await authenticatedApiRequest("POST", `/api/protected/courses/${courseId}/discussions`, {
+      const payload = {
         ...data,
         createdBy: user?.id,
-      });
-      return response.json();
+      };
+      console.log('Discussion payload:', payload);
+      
+      const response = await authenticatedApiRequest("POST", `/api/protected/courses/${courseId}/discussions`, payload);
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Failed to create discussion' }));
+        console.error('Discussion creation failed:', errorData);
+        throw new Error(errorData.message || 'Failed to create discussion');
+      }
+      
+      const result = await response.json();
+      console.log('Discussion created successfully:', result);
+      return result;
     },
-    onSuccess: () => {
+    onSuccess: (newDiscussion) => {
+      // Invalidate both the general discussions query and course-specific queries
       queryClient.invalidateQueries({ queryKey: ["/api/protected/discussions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/protected/courses"] });
+      
+      // Force refetch of discussions after a short delay to ensure the new discussion appears
+      setTimeout(() => {
+        queryClient.refetchQueries({ queryKey: ["/api/protected/discussions"] });
+      }, 100);
+      
       setIsCreateDialogOpen(false);
       setNewDiscussion({ title: "", description: "", courseId: "" });
       if (isCreateRoute) {

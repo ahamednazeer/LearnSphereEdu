@@ -73,7 +73,7 @@ jspm_packages/
 *.db
 
 # Uploads (will be mounted as volume)
-uploads/
+# uploads/
 
 # Test files
 test-*.js

@@ -1871,6 +1871,9 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
   app.post("/api/protected/courses/:courseId/discussions", async (req: Request, res: Response) => {
     try {
+      console.log(`Creating discussion for course ${req.params.courseId} by user ${req.user.userId} (${req.user.role})`);
+      console.log('Request body:', req.body);
+      
       // Allow both students and teachers to create discussions
       // Students should be enrolled in the course, teachers should own it
       const courseId = req.params.courseId;
@@ -1878,15 +1881,20 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
       // Check if user has access to this course
       if (req.user.role === 'student') {
         const enrollment = await storage.getEnrollment(courseId, req.user.userId);
+        console.log('Student enrollment check:', enrollment);
         if (!enrollment) {
+          console.log('Student not enrolled in course');
           return res.status(403).json({ message: "You must be enrolled in this course to create discussions" });
         }
       } else if (req.user.role === 'teacher') {
         const course = await storage.getCourse(courseId);
+        console.log('Teacher course check:', course);
         if (!course || course.teacherId !== req.user.userId) {
+          console.log('Teacher does not own course');
           return res.status(403).json({ message: "You can only create discussions in your own courses" });
         }
       } else if (req.user.role !== 'admin') {
+        console.log('User does not have permission');
         return res.status(403).json({ message: "You don't have permission to create discussions" });
       }
 
@@ -1896,9 +1904,12 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
         createdBy: req.user.userId
       });
       
+      console.log('Creating discussion with data:', discussionData);
       const discussion = await storage.createDiscussion(discussionData);
+      console.log('Discussion created:', discussion);
       res.json(discussion);
     } catch (error: any) {
+      console.error('Error creating discussion:', error);
       res.status(400).json({ message: error.message });
     }
   });

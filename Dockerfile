@@ -50,8 +50,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/shared ./shared
 
-# Copy uploads folder with existing materials and thumbnails
-COPY --from=builder /app/uploads ./uploads
+# Create uploads directory structure
+RUN mkdir -p /app/uploads/materials /app/uploads/thumbnails
 
 # Copy a pre-seeded database (you need to create this locally with schema + data)
 COPY db.sqlite /app/init/db.sqlite
