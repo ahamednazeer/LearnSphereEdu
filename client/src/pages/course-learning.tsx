@@ -138,6 +138,19 @@ export default function CourseLearning() {
     enabled: !!courseId,
   });
 
+  // Get course materials
+  const { data: materials = [], isLoading: materialsLoading } = useQuery({
+    queryKey: ["/api/protected/courses", courseId, "materials"],
+    queryFn: async () => {
+      const res = await authenticatedApiRequest("GET", `/api/protected/courses/${courseId}/materials`);
+      if (!res.ok) {
+        throw new Error('Failed to fetch course materials');
+      }
+      return res.json();
+    },
+    enabled: !!courseId,
+  });
+
   // Enrollment mutation
   const enrollMutation = useMutation({
     mutationFn: async () => {
@@ -2530,6 +2543,56 @@ export default function CourseLearning() {
                                   </div>
                                 ))}
                               </div>
+                            </CardContent>
+                          </Card>
+
+                          {/* Course Materials */}
+                          <Card>
+                            <CardHeader>
+                              <CardTitle className="text-md">Course Materials</CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                              {materialsLoading ? (
+                                <div className="text-center py-4">
+                                  <div className="text-muted-foreground">Loading materials...</div>
+                                </div>
+                              ) : materials.length > 0 ? (
+                                <div className="space-y-2">
+                                  {materials.map((material: any) => (
+                                    <div
+                                      key={material.id}
+                                      className="flex items-center justify-between p-3 bg-muted/30 rounded-lg"
+                                    >
+                                      <div className="flex items-center gap-3">
+                                        <FileIcon className="w-5 h-5 text-primary" />
+                                        <div>
+                                          <p className="font-medium text-sm">{material.title}</p>
+                                          <p className="text-xs text-muted-foreground">{material.type}</p>
+                                        </div>
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <Button variant="outline" size="sm" asChild>
+                                          <a href={material.url} target="_blank" rel="noopener noreferrer">
+                                            <Eye className="w-4 h-4 mr-2" />
+                                            View
+                                          </a>
+                                        </Button>
+                                        <Button variant="outline" size="sm" asChild>
+                                          <a href={material.url + '/download'} download={material.title}>
+                                            <DownloadIcon className="w-4 h-4 mr-2" />
+                                            Download
+                                          </a>
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-center py-8 text-muted-foreground">
+                                  <FileText className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                                  <p>No additional materials available for this course.</p>
+                                </div>
+                              )}
                             </CardContent>
                           </Card>
 

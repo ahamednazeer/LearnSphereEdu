@@ -14,13 +14,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { 
   BookOpen, Users, FileText, MessageCircle, 
-  Plus, Download, Calendar, Clock, Edit, Trash2 
+  Plus, Download, Calendar, Clock, Edit, Trash2, ClipboardList, File as FileIcon, Eye,
+  ZoomIn, ZoomOut, X, Image as ImageIcon, Video, Music, VideoIcon
 } from "lucide-react";
 import { ShareButton } from "@/components/share-button";
 import CourseBuilder from "@/components/course-builder/CourseBuilder";
 // @ts-ignore
 import ReactQuill from "react-quill";
 import "react-quill/dist/quill.snow.css";
+import { Document, Page, pdfjs } from 'react-pdf';
+
+// Set up PDF.js worker
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
 // QuizBuilder component for inline quiz creation
 function QuizBuilder({ quiz, onChange }: { quiz: any[]; onChange: (quiz: any[]) => void }) {
@@ -82,6 +87,334 @@ function QuizBuilder({ quiz, onChange }: { quiz: any[]; onChange: (quiz: any[]) 
   );
 }
 
+// Material Preview Component
+function MaterialPreview({ material, isOpen, onClose }: { 
+  material: any; 
+  isOpen: boolean; 
+  onClose: () => void; 
+}) {
+  const [pdfNumPages, setPdfNumPages] = useState<number | null>(null);
+  const [pdfPageNumber, setPdfPageNumber] = useState(1);
+  const [pdfScale, setPdfScale] = useState(1.0);
+  const { toast } = useToast();
+
+  // Reset PDF state when material changes
+  useEffect(() => {
+    if (material) {
+      setPdfPageNumber(1);
+      setPdfScale(1.0);
+      setPdfNumPages(null);
+    }
+  }, [material]);
+
+  if (!material) return null;
+
+  // Determine file type from URL or type
+  const getFileType = (material: any) => {
+    const url = material.url || '';
+    const type = material.type || '';
+    const mimeType = material.mimeType || '';
+    const title = material.title || '';
+    
+    // Check for PDF files
+    if (type.toLowerCase().includes('pdf') || 
+        url.toLowerCase().includes('.pdf') || 
+        title.toLowerCase().includes('.pdf') ||
+        mimeType.includes('pdf')) {
+      return 'pdf';
+    }
+    
+    // Check for video files
+    if (type.toLowerCase().includes('video') || 
+        url.match(/\.(mp4|webm|ogg|avi|mov|mkv|flv)$/i) || 
+        title.match(/\.(mp4|webm|ogg|avi|mov|mkv|flv)$/i) ||
+        mimeType.startsWith('video/')) {
+      return 'video';
+    }
+    
+    // Check for audio files
+    if (type.toLowerCase().includes('audio') || 
+        url.match(/\.(mp3|wav|ogg|m4a|aac|flac)$/i) || 
+        title.match(/\.(mp3|wav|ogg|m4a|aac|flac)$/i) ||
+        mimeType.startsWith('audio/')) {
+      return 'audio';
+    }
+    
+    // Check for image files
+    if (type.toLowerCase().includes('image') || 
+        url.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp|tiff)$/i) || 
+        title.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp|tiff)$/i) ||
+        mimeType.startsWith('image/')) {
+      return 'image';
+    }
+    
+    // Check for text files
+    if (url.match(/\.(txt|md|json|xml|csv|html|htm)$/i) || 
+        title.match(/\.(txt|md|json|xml|csv|html|htm)$/i) ||
+        mimeType.startsWith('text/')) {
+      return 'text';
+    }
+    
+    // Check for document files (Word, Excel, PowerPoint, etc.)
+    if (url.match(/\.(doc|docx|xls|xlsx|ppt|pptx|rtf)$/i) || 
+        title.match(/\.(doc|docx|xls|xlsx|ppt|pptx|rtf)$/i) ||
+        mimeType.includes('document') ||
+        mimeType.includes('spreadsheet') ||
+        mimeType.includes('presentation')) {
+      return 'document';
+    }
+    
+    return 'file';
+  };
+
+  const fileType = getFileType(material);
+
+  const renderPreviewContent = () => {
+    switch (fileType) {
+      case 'pdf':
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-3 bg-gray-50 border-b">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPdfPageNumber(Math.max(1, pdfPageNumber - 1))}
+                  disabled={pdfPageNumber <= 1}
+                >
+                  Previous
+                </Button>
+                <span className="text-sm">
+                  Page {pdfPageNumber} of {pdfNumPages || '?'}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPdfPageNumber(Math.min(pdfNumPages || 1, pdfPageNumber + 1))}
+                  disabled={pdfPageNumber >= (pdfNumPages || 1)}
+                >
+                  Next
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPdfScale(Math.max(0.5, pdfScale - 0.1))}
+                >
+                  <ZoomOut className="w-3 h-3" />
+                </Button>
+                <span className="text-sm">{Math.round(pdfScale * 100)}%</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPdfScale(Math.min(2.0, pdfScale + 0.1))}
+                >
+                  <ZoomIn className="w-3 h-3" />
+                </Button>
+              </div>
+            </div>
+            <div className="max-h-[70vh] overflow-auto flex justify-center p-4">
+              <Document
+                file={material.url}
+                onLoadSuccess={({ numPages }) => {
+                  setPdfNumPages(numPages);
+                  setPdfPageNumber(1);
+                }}
+                onLoadError={(error) => {
+                  console.error('PDF load error:', error);
+                  toast({
+                    title: "PDF Load Error",
+                    description: "Failed to load PDF. Please try again.",
+                    variant: "destructive",
+                  });
+                }}
+              >
+                <Page
+                  pageNumber={pdfPageNumber}
+                  scale={pdfScale}
+                  renderTextLayer={false}
+                  renderAnnotationLayer={false}
+                />
+              </Document>
+            </div>
+          </div>
+        );
+
+      case 'video':
+        return (
+          <div className="space-y-4">
+            <video 
+              src={material.url} 
+              controls 
+              className="w-full max-h-[70vh] rounded"
+              preload="metadata"
+            />
+            <div className="text-sm text-muted-foreground text-center">
+              {material.title}
+            </div>
+          </div>
+        );
+
+      case 'audio':
+        return (
+          <div className="space-y-4 p-8 text-center">
+            <div className="w-16 h-16 mx-auto mb-4 text-blue-500">
+              <Music className="w-full h-full" />
+            </div>
+            <audio 
+              src={material.url} 
+              controls 
+              className="w-full max-w-md mx-auto"
+              preload="metadata"
+            />
+            <div className="text-sm text-muted-foreground">
+              {material.title}
+            </div>
+          </div>
+        );
+
+      case 'image':
+        return (
+          <div className="space-y-4">
+            <div className="flex justify-center p-4">
+              <img 
+                src={material.url} 
+                alt={material.title}
+                className="max-w-full max-h-[70vh] object-contain rounded"
+                onError={(e) => {
+                  console.error('Image load error:', e);
+                  toast({
+                    title: "Image Load Error",
+                    description: "Failed to load image.",
+                    variant: "destructive",
+                  });
+                }}
+              />
+            </div>
+            <div className="text-sm text-muted-foreground text-center">
+              {material.title}
+            </div>
+          </div>
+        );
+
+      case 'text':
+        return (
+          <div className="space-y-4">
+            <iframe
+              src={material.url}
+              className="w-full h-[70vh] border rounded"
+              title={material.title}
+            />
+            <div className="text-sm text-muted-foreground text-center">
+              {material.title}
+            </div>
+          </div>
+        );
+
+      case 'document':
+        return (
+          <div className="space-y-4 p-8 text-center">
+            <div className="w-16 h-16 mx-auto mb-4 text-blue-600">
+              <FileText className="w-full h-full" />
+            </div>
+            <h3 className="text-lg font-medium">{material.title}</h3>
+            <p className="text-muted-foreground mb-4">
+              This document can be viewed by downloading or opening in a new tab.
+            </p>
+            <div className="flex justify-center gap-2">
+              <Button variant="outline" asChild>
+                <a href={material.url} target="_blank" rel="noopener noreferrer">
+                  <Eye className="w-4 h-4 mr-2" />
+                  Open in New Tab
+                </a>
+              </Button>
+              <Button variant="outline" asChild>
+                <a href={material.url} download={material.title}>
+                  <Download className="w-4 h-4 mr-2" />
+                  Download
+                </a>
+              </Button>
+            </div>
+          </div>
+        );
+
+      default:
+        return (
+          <div className="space-y-4 p-8 text-center">
+            <div className="w-16 h-16 mx-auto mb-4 text-gray-500">
+              <FileIcon className="w-full h-full" />
+            </div>
+            <h3 className="text-lg font-medium">{material.title}</h3>
+            <p className="text-muted-foreground">
+              This file type cannot be previewed directly.
+            </p>
+            <div className="flex justify-center gap-2">
+              <Button variant="outline" asChild>
+                <a href={material.url} target="_blank" rel="noopener noreferrer">
+                  <Eye className="w-4 h-4 mr-2" />
+                  Open in New Tab
+                </a>
+              </Button>
+              <Button variant="outline" asChild>
+                <a href={material.url} download={material.title}>
+                  <Download className="w-4 h-4 mr-2" />
+                  Download
+                </a>
+              </Button>
+            </div>
+          </div>
+        );
+    }
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden">
+        <DialogHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <DialogTitle className="flex items-center gap-2">
+                {fileType === 'pdf' && <FileIcon className="w-5 h-5 text-red-500" />}
+                {fileType === 'video' && <Video className="w-5 h-5 text-blue-500" />}
+                {fileType === 'audio' && <Music className="w-5 h-5 text-green-500" />}
+                {fileType === 'image' && <ImageIcon className="w-5 h-5 text-purple-500" />}
+                {fileType === 'text' && <FileText className="w-5 h-5 text-orange-500" />}
+                {fileType === 'document' && <FileText className="w-5 h-5 text-blue-600" />}
+                {fileType === 'file' && <FileIcon className="w-5 h-5 text-gray-500" />}
+                {material.title}
+              </DialogTitle>
+              <DialogDescription>
+                {material.type} • Preview
+              </DialogDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" asChild>
+                <a href={material.url} target="_blank" rel="noopener noreferrer">
+                  <Eye className="w-4 h-4 mr-2" />
+                  Open
+                </a>
+              </Button>
+              <Button variant="outline" size="sm" asChild>
+                <a href={material.url} download={material.title}>
+                  <Download className="w-4 h-4 mr-2" />
+                  Download
+                </a>
+              </Button>
+              <Button variant="ghost" size="sm" onClick={onClose}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        </DialogHeader>
+        <div className="overflow-auto">
+          {renderPreviewContent()}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function CourseDetail() {
   const [match, params] = useRoute("/courses/:id");
   const { user } = useAuth();
@@ -95,7 +428,16 @@ export default function CourseDetail() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [selectedLessonId, setSelectedLessonId] = useState<string>("");
+  
+  // Material Preview State
+  const [previewMaterial, setPreviewMaterial] = useState<any>(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  // Handle Material Preview
+  const handlePreviewMaterial = (material: any) => {
+    setPreviewMaterial(material);
+    setIsPreviewOpen(true);
+  };
   
   const [editFormData, setEditFormData] = useState({
     title: "",
@@ -141,17 +483,13 @@ export default function CourseDetail() {
       setUploading(false);
       return;
     }
-    if (!selectedLessonId) {
-      setUploadError("Please select a lesson.");
-      setUploading(false);
-      return;
-    }
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("title", file.name);
     try {
       const response = await authenticatedApiRequest(
         "POST",
-        `/api/protected/lessons/${selectedLessonId}/upload`,
+        `/api/protected/courses/${courseId}/materials`,
         formData
       );
       if (!response.ok) throw new Error("Upload failed");
@@ -162,6 +500,29 @@ export default function CourseDetail() {
       setUploadError(err.message || "Upload failed");
     } finally {
       setUploading(false);
+    }
+  };
+
+  // Delete Material
+  const handleDeleteMaterial = async (materialId: string) => {
+    if (!confirm('Are you sure you want to delete this material?')) {
+      return;
+    }
+    
+    try {
+      const response = await authenticatedApiRequest(
+        "DELETE",
+        `/api/protected/courses/${courseId}/materials/${materialId}`
+      );
+      if (!response.ok) throw new Error("Delete failed");
+      queryClient.invalidateQueries({ queryKey: ["/api/protected/courses", courseId, "materials"] });
+      toast({ title: "Material deleted!", description: "The material has been removed." });
+    } catch (err: any) {
+      toast({ 
+        title: "Delete failed", 
+        description: err.message || "Failed to delete material",
+        variant: "destructive"
+      });
     }
   };
 
@@ -316,6 +677,47 @@ export default function CourseDetail() {
     }
   };
 
+  const handleStartVideoSession = async () => {
+    if (!courseId || !user) return;
+    
+    try {
+      // Create a new video session
+      const sessionData = {
+        courseId,
+        title: `Live Class: ${course?.title}`,
+        description: `Live class session for ${course?.title}`,
+        sessionType: 'class',
+        scheduledAt: new Date().getTime(),
+        maxParticipants: 50,
+      };
+
+      const response = await authenticatedApiRequest("POST", "/api/video-sessions", sessionData);
+      if (!response.ok) throw new Error("Failed to create video session");
+      
+      const session = await response.json();
+      
+      // Start the session immediately
+      const startResponse = await authenticatedApiRequest("POST", `/api/video-sessions/${session.id}/start`);
+      if (!startResponse.ok) {
+        console.warn("Failed to start session automatically, but session was created");
+      }
+      
+      // Navigate to the video session
+      setLocation(`/video-session/${session.id}`);
+      
+      toast({ 
+        title: "Live class started!", 
+        description: "You can now invite students to join the session." 
+      });
+    } catch (err: any) {
+      toast({ 
+        title: "Failed to start live class", 
+        description: err.message || "Please try again",
+        variant: "destructive"
+      });
+    }
+  };
+
   const [newAnnouncement, setNewAnnouncement] = useState({
     title: "",
     content: "",
@@ -374,10 +776,32 @@ export default function CourseDetail() {
     retry: 3, // Retry failed requests up to 3 times
   });
 
+  const { data: videoSessions = [], isLoading: videoSessionsLoading } = useQuery({
+    queryKey: ["/api/courses", courseId, "video-sessions"],
+    queryFn: async () => {
+      const response = await authenticatedApiRequest("GET", `/api/courses/${courseId}/video-sessions`);
+      return response.json();
+    },
+    enabled: !!courseId,
+    refetchInterval: 10000, // Refresh every 10 seconds to check for new sessions
+  });
+
   const { data: modules = [], isLoading: modulesLoading } = useQuery({
     queryKey: ["/api/protected/courses", courseId, "modules"],
     queryFn: async () => {
       const response = await authenticatedApiRequest("GET", `/api/protected/courses/${courseId}/modules`);
+      return response.json();
+    },
+    enabled: !!courseId,
+  });
+
+  const { data: materials = [], isLoading: materialsLoading } = useQuery({
+    queryKey: ["/api/protected/courses", courseId, "materials"],
+    queryFn: async () => {
+      const response = await authenticatedApiRequest("GET", `/api/protected/courses/${courseId}/materials`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch course materials');
+      }
       return response.json();
     },
     enabled: !!courseId,
@@ -681,7 +1105,7 @@ export default function CourseDetail() {
             <ShareButton 
               title={`Check out this course: ${course.title}`}
               description={course.description?.replace(/<[^>]*>/g, '') || `Learn ${course.subject} with this comprehensive course.`}
-              variant="outline"
+              variant="secondary"
               size="default"
             />
             {user?.role === "student" && course.isEnrolled && (
@@ -696,11 +1120,20 @@ export default function CourseDetail() {
             {user?.role === "teacher" && course.teacherId === user.id && (
               <>
                 <Button 
-                  variant={course.status === "published" ? "outline" : "default"}
+                  variant={course.status === "published" ? "secondary" : "default"}
                   onClick={() => setLocation(`/courses/${course.id}/preview`)}
                   data-testid="button-preview-course"
                 >
                   {course.status === "published" ? "Preview Course" : "Preview & Publish"}
+                </Button>
+                <Button 
+                  variant="outline"
+                  onClick={() => handleStartVideoSession()}
+                  data-testid="button-start-video-session"
+                  className="bg-white/10 border-white/20 text-white hover:bg-white/20"
+                >
+                  <VideoIcon className="w-4 h-4 mr-2" />
+                  Start Live Class
                 </Button>
               <Dialog open={isAnnouncementDialogOpen} onOpenChange={setIsAnnouncementDialogOpen}>
                 <DialogTrigger asChild>
@@ -761,7 +1194,7 @@ export default function CourseDetail() {
                 </DialogContent>
               </Dialog>
               <Button 
-                variant="outline" 
+                variant="secondary" 
                 onClick={handleEditCourse}
                 data-testid="button-edit-course"
               >
@@ -782,13 +1215,48 @@ export default function CourseDetail() {
         </div>
       </div>
 
+      {/* Live Session Banner for Students */}
+      {user?.role === "student" && videoSessions.some((session: any) => session.status === 'active') && (
+        <div className="mb-6">
+          <Card className="border-2 border-red-500 bg-red-50 dark:bg-red-950/20">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                    <VideoIcon className="w-6 h-6 text-red-500" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-red-900 dark:text-red-100">Live Class in Progress!</h3>
+                    <p className="text-sm text-red-700 dark:text-red-300">
+                      {videoSessions.find((s: any) => s.status === 'active')?.title || 'A live class is currently active'}
+                    </p>
+                  </div>
+                </div>
+                <Button 
+                  onClick={() => {
+                    const activeSession = videoSessions.find((s: any) => s.status === 'active');
+                    if (activeSession) setLocation(`/video-session/${activeSession.id}`);
+                  }}
+                  className="bg-red-500 hover:bg-red-600 text-white"
+                >
+                  <VideoIcon className="w-4 h-4 mr-2" />
+                  Join Now
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* Course Content */}
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className={`grid w-full ${user?.role === 'teacher' && course?.teacherId === user?.id ? 'grid-cols-6' : 'grid-cols-5'}`}>
+        <TabsList className={`grid w-full ${user?.role === 'teacher' && course?.teacherId === user?.id ? 'grid-cols-7' : 'grid-cols-6'}`}>
           <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
           <TabsTrigger value="content" data-testid="tab-content">Content</TabsTrigger>
           <TabsTrigger value="materials" data-testid="tab-materials">Materials</TabsTrigger>
           <TabsTrigger value="assessments" data-testid="tab-assessments">Assessments</TabsTrigger>
+          <TabsTrigger value="assignments" data-testid="tab-assignments">Assignments</TabsTrigger>
           <TabsTrigger value="discussions" data-testid="tab-discussions">Discussions</TabsTrigger>
           {user?.role === 'teacher' && course?.teacherId === user?.id && (
             <TabsTrigger value="builder" data-testid="tab-builder">Course Builder</TabsTrigger>
@@ -827,6 +1295,58 @@ export default function CourseDetail() {
               )}
             </CardContent>
           </Card>
+
+          {/* Active Live Sessions */}
+          {videoSessions.filter((session: any) => session.status === 'scheduled' || session.status === 'active').length > 0 && (
+            <Card className="border-2 border-primary">
+              <CardHeader>
+                <CardTitle className="flex items-center">
+                  <VideoIcon className="w-5 h-5 mr-2 text-primary" />
+                  Live Sessions
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {videoSessions
+                    .filter((session: any) => session.status === 'scheduled' || session.status === 'active')
+                    .map((session: any) => (
+                      <div key={session.id} className="flex items-center justify-between p-4 bg-primary/5 rounded-lg border border-primary/20">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-medium text-foreground">{session.title}</h4>
+                            {session.status === 'active' && (
+                              <Badge className="bg-red-500 animate-pulse">
+                                <span className="flex items-center gap-1">
+                                  <span className="w-2 h-2 bg-white rounded-full"></span>
+                                  LIVE
+                                </span>
+                              </Badge>
+                            )}
+                            {session.status === 'scheduled' && (
+                              <Badge variant="secondary">Scheduled</Badge>
+                            )}
+                          </div>
+                          {session.description && (
+                            <p className="text-muted-foreground text-sm mt-1">{session.description}</p>
+                          )}
+                          <p className="text-xs text-muted-foreground mt-2">
+                            {session.scheduledAt && `Scheduled: ${new Date(session.scheduledAt).toLocaleString()}`}
+                          </p>
+                        </div>
+                        <Button 
+                          onClick={() => setLocation(`/video-session/${session.id}`)}
+                          className="ml-4"
+                          variant={session.status === 'active' ? 'default' : 'outline'}
+                        >
+                          <VideoIcon className="w-4 h-4 mr-2" />
+                          {session.status === 'active' ? 'Join Now' : 'View Details'}
+                        </Button>
+                      </div>
+                    ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Course Stats */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -971,61 +1491,109 @@ export default function CourseDetail() {
         <TabsContent value="materials" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Course Materials</CardTitle>
-              <CardDescription>Resources and files for this course</CardDescription>
+              <div className="flex justify-between items-center">
+                <div>
+                  <CardTitle>Course Materials</CardTitle>
+                  <CardDescription>Resources and files for this course</CardDescription>
+                </div>
+                {user?.role === "teacher" && course.teacherId === user.id && (
+                  <Button variant="secondary" data-testid="button-upload-materials" onClick={() => setIsUploadDialogOpen(true)}>
+                    <Plus className="w-4 h-4 mr-2" />
+                    Upload Materials
+                  </Button>
+                )}
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="text-center py-8 text-muted-foreground">
-                <Download className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>No materials uploaded yet</p>
-                {user?.role === "teacher" && course.teacherId === user.id && (
-                  <>
-                    <Button className="mt-4" variant="outline" data-testid="button-upload-materials" onClick={() => setIsUploadDialogOpen(true)}>
+              {materialsLoading ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <div>Loading materials...</div>
+                </div>
+              ) : materials.length > 0 ? (
+                <div className="space-y-3">
+                  {materials.map((material: any) => (
+                    <div
+                      key={material.id}
+                      className="flex items-center justify-between p-4 bg-muted/30 rounded-lg border"
+                    >
+                      <div className="flex items-center gap-3">
+                        <FileIcon className="w-6 h-6 text-primary" />
+                        <div>
+                          <p className="font-medium">{material.title}</p>
+                          <p className="text-sm text-muted-foreground">{material.type}</p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button 
+                          variant="secondary" 
+                          size="sm" 
+                          onClick={() => handlePreviewMaterial(material)}
+                        >
+                          <Eye className="w-4 h-4 mr-2" />
+                          Preview
+                        </Button>
+                        <Button variant="outline" size="sm" asChild>
+                          <a href={material.url} target="_blank" rel="noopener noreferrer">
+                            <Download className="w-4 h-4 mr-2" />
+                            Open
+                          </a>
+                        </Button>
+                        <Button variant="outline" size="sm" asChild>
+                          <a href={material.url} download={material.title}>
+                            <Download className="w-4 h-4 mr-2" />
+                            Download
+                          </a>
+                        </Button>
+                        {user?.role === "teacher" && course.teacherId === user.id && (
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => handleDeleteMaterial(material.id)}
+                            className="text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Download className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                  <p>No materials uploaded yet</p>
+                  {user?.role === "teacher" && course.teacherId === user.id && (
+                    <Button className="mt-4" variant="outline" data-testid="button-upload-materials-empty" onClick={() => setIsUploadDialogOpen(true)}>
                       <Plus className="w-4 h-4 mr-2" />
                       Upload Materials
                     </Button>
-                    {/* Upload Dialog */}
-                    <Dialog open={isUploadDialogOpen} onOpenChange={setIsUploadDialogOpen}>
-                      <DialogTrigger asChild>
-                        <Button variant="outline" onClick={() => setIsUploadDialogOpen(true)}>
-                          Upload Materials
-                        </Button>
-                      </DialogTrigger>
-                      <DialogContent>
-                        <DialogHeader>
-                          <DialogTitle>Upload Course Material</DialogTitle>
-                          <DialogDescription>Select a lesson and upload a file (video, PDF, etc.).</DialogDescription>
-                        </DialogHeader>
-                        <form onSubmit={handleUploadMaterials} className="space-y-4">
-                          <Label htmlFor="lesson">Lesson</Label>
-                          <select
-                            id="lesson"
-                            value={selectedLessonId}
-                            onChange={e => setSelectedLessonId(e.target.value)}
-                            required
-                            className="w-full border rounded px-2 py-1"
-                          >
-                            <option value="">Select a lesson</option>
-                            {course?.modules?.flatMap((mod: any) =>
-                              mod.lessons?.map((lesson: any) => (
-                                <option key={lesson.id} value={lesson.id}>
-                                  {mod.title} - {lesson.title}
-                                </option>
-                              ))
-                            )}
-                          </select>
-                          <Label htmlFor="file">File</Label>
-                          <Input id="file" type="file" ref={fileInputRef} required />
-                          {uploadError && <div className="text-red-500 text-sm">{uploadError}</div>}
-                          <Button type="submit" disabled={uploading}>
-                            {uploading ? "Uploading..." : "Upload"}
-                          </Button>
-                        </form>
-                      </DialogContent>
-                    </Dialog>
-                  </>
-                )}
-              </div>
+                  )}
+                </div>
+              )}
+              {/* Upload Dialog */}
+              {user?.role === "teacher" && course.teacherId === user.id && (
+                <Dialog open={isUploadDialogOpen} onOpenChange={setIsUploadDialogOpen}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Upload Course Material</DialogTitle>
+                      <DialogDescription>Upload additional resources and files for this course.</DialogDescription>
+                    </DialogHeader>
+                    <form onSubmit={handleUploadMaterials} className="space-y-4">
+                      <div>
+                        <Label htmlFor="file">File</Label>
+                        <Input id="file" type="file" ref={fileInputRef} required />
+                        <p className="text-sm text-muted-foreground mt-1">
+                          Supported formats: PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, TXT, and more
+                        </p>
+                      </div>
+                      {uploadError && <div className="text-red-500 text-sm">{uploadError}</div>}
+                      <Button type="submit" disabled={uploading}>
+                        {uploading ? "Uploading..." : "Upload"}
+                      </Button>
+                    </form>
+                  </DialogContent>
+                </Dialog>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -1096,6 +1664,25 @@ export default function CourseDetail() {
               ))}
             </div>
           )}
+        </TabsContent>
+        
+        <TabsContent value="assignments" className="space-y-6">
+          <div className="flex justify-between items-center">
+            <h2 className="text-2xl font-bold text-foreground">Assignments</h2>
+          </div>
+          
+          <Card>
+            <CardContent className="py-8 text-center">
+              <ClipboardList className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+              <p className="text-muted-foreground mb-4">
+                View and submit assignments for this course
+              </p>
+              <Button onClick={() => setLocation(`/courses/${courseId}/assignments`)}>
+                <ClipboardList className="h-4 w-4 mr-2" />
+                View Assignments
+              </Button>
+            </CardContent>
+          </Card>
         </TabsContent>
         
         <TabsContent value="discussions" className="space-y-6">
@@ -1342,6 +1929,13 @@ export default function CourseDetail() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Material Preview Dialog */}
+      <MaterialPreview
+        material={previewMaterial}
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+      />
     </div>
   );
 }

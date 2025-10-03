@@ -12,7 +12,8 @@
     "test:assessments": "node test-assessments-quick.js",
     "test:assessments:full": "node test-assessments-comprehensive.js",
     "test:assessments:ui": "node test-assessments-ui.js",
-    "test:all": "node test-comprehensive.js"
+    "test:all": "node test-comprehensive.js",
+    "test:video-session": "node test-video-session-complete.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -48,8 +49,9 @@
     "@tanstack/react-query": "^5.60.5",
     "@types/fluent-ffmpeg": "^2.1.27",
     "@types/multer": "^2.0.0",
+    "@types/simple-peer": "^9.11.8",
     "bcryptjs": "^3.0.2",
-    "better-sqlite3": "^12.2.0",
+    "better-sqlite3": "^12.3.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -58,6 +60,7 @@
     "drizzle-orm": "^0.39.1",
     "drizzle-zod": "^0.7.0",
     "embla-carousel-react": "^8.6.0",
+    "esbuild": "^0.25.10",
     "express": "^4.21.2",
     "express-session": "^1.18.1",
     "fluent-ffmpeg": "^2.1.3",
@@ -82,6 +85,10 @@
     "react-quill": "^2.0.0",
     "react-resizable-panels": "^2.1.7",
     "recharts": "^2.15.2",
+    "recordrtc": "^5.6.2",
+    "simple-peer": "^9.11.1",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
     "tw-animate-css": "^1.2.5",
@@ -92,6 +99,8 @@
     "zod-validation-error": "^3.4.0"
   },
   "devDependencies": {
+    "@esbuild-plugins/node-globals-polyfill": "^0.2.3",
+    "@esbuild-plugins/node-modules-polyfill": "^0.2.2",
     "@replit/vite-plugin-cartographer": "^0.3.0",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.3",
     "@tailwindcss/typography": "^0.5.15",
@@ -108,12 +117,14 @@
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.3.2",
     "autoprefixer": "^10.4.20",
+    "buffer": "^6.0.3",
     "drizzle-kit": "^0.30.4",
-    "esbuild": "^0.25.0",
     "postcss": "^8.4.47",
+    "process": "^0.11.10",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.1",
     "typescript": "5.6.3",
+    "util": "^0.12.5",
     "vite": "^5.4.19"
   },
   "optionalDependencies": {

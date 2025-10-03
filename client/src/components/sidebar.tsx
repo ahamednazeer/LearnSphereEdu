@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { 
   Home, BookOpen, FileText, MessageCircle, User, Settings, 
-  GraduationCap, PlusCircle, BarChart3 
+  GraduationCap, PlusCircle, BarChart3, Bell 
 } from "lucide-react";
 
 export default function Sidebar() {
@@ -16,16 +16,17 @@ export default function Sidebar() {
     { name: "Assessments", icon: FileText, path: "/assessments" },
     { name: "Grades", icon: GraduationCap, path: "/grades" },
     { name: "Discussions", icon: MessageCircle, path: "/discussions" },
+    { name: "Notice Board", icon: Bell, path: "/notices" },
   ];
 
   const teacherNavigation = [
     { name: "Dashboard", icon: Home, path: "/dashboard" },
     { name: "Instructor Dashboard", icon: BarChart3, path: "/instructor-dashboard" },
     { name: "My Courses", icon: BookOpen, path: "/courses" },
-
     { name: "Assessments", icon: FileText, path: "/assessments" },
     { name: "Analytics", icon: BarChart3, path: "/analytics" },
     { name: "Discussions", icon: MessageCircle, path: "/discussions" },
+    { name: "Notice Board", icon: Bell, path: "/notices" },
   ];
 
   const accountNavigation = [

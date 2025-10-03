@@ -8,19 +8,27 @@ import { getVideoDuration, isVideoFile, formatDuration, parseDurationToSeconds, 
 
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertUserSchema, insertCourseSchema, insertAssessmentSchema, insertQuestionSchema, insertDiscussionSchema, enhancedInsertCourseSchema, insertCertificateSchema, insertAssignmentSchema } from "@shared/schema";
+import { insertUserSchema, insertCourseSchema, insertAssessmentSchema, insertQuestionSchema, insertDiscussionSchema, enhancedInsertCourseSchema, insertCertificateSchema, insertAssignmentSchema, insertAssignmentSubmissionSchema, insertNoticeBoardSchema, insertNotificationSchema } from "@shared/schema";
 import bcrypt from "bcryptjs";
 import { sessionManager } from "./sessionManager";
 import { authenticateToken, requireRole, extractClientInfo, optionalAuth } from "./authMiddleware";
 
-export async function registerRoutes(app: express.Express): Promise<Server> {
+export async function registerRoutes(app: express.Express, httpServer?: Server): Promise<Server> {
   // Multer setup for uploads
   const uploadDir = path.join(process.cwd(), "uploads/materials");
   const thumbnailDir = path.join(process.cwd(), "uploads/thumbnails");
+  const assignmentDir = path.join(process.cwd(), "uploads/assignments");
+  const noticeDir = path.join(process.cwd(), "uploads/notices");
+  
   if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
   if (!fs.existsSync(thumbnailDir)) fs.mkdirSync(thumbnailDir, { recursive: true });
+  if (!fs.existsSync(assignmentDir)) fs.mkdirSync(assignmentDir, { recursive: true });
+  if (!fs.existsSync(noticeDir)) fs.mkdirSync(noticeDir, { recursive: true });
+  
   const upload = multer({ dest: uploadDir, limits: { fileSize: 1024 * 1024 * 500 } }); // 500MB max
   const thumbnailUpload = multer({ dest: thumbnailDir, limits: { fileSize: 1024 * 1024 * 5 } }); // 5MB max
+  const assignmentUpload = multer({ dest: assignmentDir, limits: { fileSize: 1024 * 1024 * 50 } }); // 50MB max for assignments
+  const noticeUpload = multer({ dest: noticeDir, limits: { fileSize: 1024 * 1024 * 10 } }); // 10MB max for notice attachments
 
   // Custom file serving route for inline viewing with range request support
   app.get("/uploads/materials/:filename", (req: Request, res: Response) => {
@@ -284,6 +292,297 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
+  });
+
+  // ===== ASSIGNMENT SUBMISSION ROUTES =====
+  
+  // Get assignments for a course
+  app.get("/api/protected/courses/:courseId/assignments", async (req: Request, res: Response) => {
+    try {
+      const { courseId } = req.params;
+      const assignments = await storage.getAssignmentsByCourse(courseId);
+      res.json(assignments);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get assignment details with submissions (for teachers)
+  app.get("/api/protected/assignments/:assignmentId", async (req: Request, res: Response) => {
+    try {
+      const { assignmentId } = req.params;
+      const assignment = await storage.getAssignmentWithSubmissions(assignmentId);
+      
+      if (!assignment) {
+        return res.status(404).json({ message: "Assignment not found" });
+      }
+
+      // Check if user has access to this assignment
+      if (req.user.role === 'student') {
+        // Students can only see their own submissions
+        const studentSubmissions = assignment.submissions?.filter(sub => sub.studentId === req.user.userId) || [];
+        res.json({ ...assignment, submissions: studentSubmissions });
+      } else if (req.user.role === 'teacher' || req.user.role === 'admin') {
+        // Teachers can see all submissions
+        res.json(assignment);
+      } else {
+        return res.status(403).json({ message: "Access denied" });
+      }
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Submit assignment (file upload)
+  app.post("/api/protected/assignments/:assignmentId/submit", assignmentUpload.single("file"), async (req: Request, res: Response) => {
+    try {
+      if (req.user.role !== 'student') {
+        return res.status(403).json({ message: "Only students can submit assignments" });
+      }
+
+      const { assignmentId } = req.params;
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      // Get assignment details
+      const assignment = await storage.getAssignment(assignmentId);
+      if (!assignment) {
+        return res.status(404).json({ message: "Assignment not found" });
+      }
+
+      // Check if assignment is published and not closed
+      if (assignment.status !== 'published') {
+        return res.status(400).json({ message: "Assignment is not available for submission" });
+      }
+
+      // Check due date
+      if (assignment.dueDate && new Date() > new Date(assignment.dueDate)) {
+        return res.status(400).json({ message: "Assignment submission deadline has passed" });
+      }
+
+      // Validate file type
+      const fileExt = path.extname(file.originalname).toLowerCase().substring(1);
+      const allowedTypes = assignment.allowedFileTypes.split(',').map(type => type.trim().toLowerCase());
+      if (!allowedTypes.includes(fileExt)) {
+        return res.status(400).json({ message: `File type .${fileExt} is not allowed. Allowed types: ${allowedTypes.join(', ')}` });
+      }
+
+      // Validate file size
+      if (file.size > assignment.maxFileSize) {
+        return res.status(400).json({ message: `File size exceeds maximum allowed size of ${Math.round(assignment.maxFileSize / 1024 / 1024)}MB` });
+      }
+
+      // Check if student already submitted
+      const existingSubmission = await storage.getAssignmentSubmission(assignmentId, req.user.userId);
+      if (existingSubmission) {
+        return res.status(400).json({ message: "You have already submitted this assignment" });
+      }
+
+      // Create file hash for integrity
+      const crypto = require('crypto');
+      const fileBuffer = fs.readFileSync(file.path);
+      const fileHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+
+      // Create submission record
+      const submissionData = insertAssignmentSubmissionSchema.parse({
+        assignmentId,
+        studentId: req.user.userId,
+        fileName: file.filename,
+        originalFileName: file.originalname,
+        fileSize: file.size,
+        mimeType: file.mimetype,
+        fileUrl: `/uploads/assignments/${file.filename}`,
+        fileHash,
+        status: 'submitted'
+      });
+
+      const submission = await storage.createAssignmentSubmission(submissionData);
+      res.json(submission);
+    } catch (error: any) {
+      console.error("Assignment submission error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Grade assignment submission (teachers only)
+  app.put("/api/protected/submissions/:submissionId/grade", async (req: Request, res: Response) => {
+    try {
+      if (req.user.role !== 'teacher' && req.user.role !== 'admin') {
+        return res.status(403).json({ message: "Only teachers can grade assignments" });
+      }
+
+      const { submissionId } = req.params;
+      const { grade, feedback } = req.body;
+
+      if (grade !== undefined && (typeof grade !== 'number' || grade < 0)) {
+        return res.status(400).json({ message: "Grade must be a non-negative number" });
+      }
+
+      const submission = await storage.updateAssignmentSubmission(submissionId, {
+        grade,
+        feedback,
+        gradedAt: new Date(),
+        gradedBy: req.user.userId,
+        status: 'graded'
+      });
+
+      res.json(submission);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Download assignment submission file
+  app.get("/uploads/assignments/:filename", (req: Request, res: Response) => {
+    const filename = req.params.filename;
+    
+    // Security check: ensure filename doesn't contain path traversal
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ message: "Invalid filename" });
+    }
+    
+    const filePath = path.join(assignmentDir, filename);
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "File not found" });
+    }
+    
+    // Set appropriate headers for download
+    res.setHeader('Content-Disposition', 'attachment');
+    res.sendFile(filePath);
+  });
+
+  // ===== NOTICE BOARD ROUTES =====
+
+  // Get all active notices (with filtering)
+  app.get("/api/protected/notices", async (req: Request, res: Response) => {
+    try {
+      const { courseId, priority, targetAudience } = req.query;
+      const notices = await storage.getNotices({
+        courseId: courseId as string,
+        priority: priority as string,
+        targetAudience: targetAudience as string
+      });
+      res.json(notices);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Create notice (teachers/admins only)
+  app.post("/api/protected/notices", noticeUpload.single("attachment"), async (req: Request, res: Response) => {
+    try {
+      if (req.user.role !== 'teacher' && req.user.role !== 'admin') {
+        return res.status(403).json({ message: "Only teachers and admins can create notices" });
+      }
+
+      const processedBody = { ...req.body };
+      
+      // Handle attachment if uploaded
+      if (req.file) {
+        processedBody.attachmentUrl = `/uploads/notices/${req.file.filename}`;
+      }
+
+      // Convert expiresAt from ISO string to Date object if provided
+      if (processedBody.expiresAt && typeof processedBody.expiresAt === 'string') {
+        processedBody.expiresAt = new Date(processedBody.expiresAt);
+      }
+
+      const noticeData = insertNoticeBoardSchema.parse({
+        ...processedBody,
+        authorId: req.user.userId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const notice = await storage.createNotice(noticeData);
+      res.json(notice);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Update notice (author or admin only)
+  app.put("/api/protected/notices/:noticeId", noticeUpload.single("attachment"), async (req: Request, res: Response) => {
+    try {
+      const { noticeId } = req.params;
+      const notice = await storage.getNotice(noticeId);
+
+      if (!notice) {
+        return res.status(404).json({ message: "Notice not found" });
+      }
+
+      // Check permissions
+      if (req.user.role !== 'admin' && notice.authorId !== req.user.userId) {
+        return res.status(403).json({ message: "You can only edit your own notices" });
+      }
+
+      const processedBody = { ...req.body };
+      
+      // Handle attachment if uploaded
+      if (req.file) {
+        processedBody.attachmentUrl = `/uploads/notices/${req.file.filename}`;
+      }
+
+      // Convert expiresAt from ISO string to Date object if provided
+      if (processedBody.expiresAt && typeof processedBody.expiresAt === 'string') {
+        processedBody.expiresAt = new Date(processedBody.expiresAt);
+      }
+
+      processedBody.updatedAt = new Date();
+
+      const updatedNotice = await storage.updateNotice(noticeId, processedBody);
+      res.json(updatedNotice);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Delete notice (author or admin only)
+  app.delete("/api/protected/notices/:noticeId", async (req: Request, res: Response) => {
+    try {
+      const { noticeId } = req.params;
+      const notice = await storage.getNotice(noticeId);
+
+      if (!notice) {
+        return res.status(404).json({ message: "Notice not found" });
+      }
+
+      // Check permissions
+      if (req.user.role !== 'admin' && notice.authorId !== req.user.userId) {
+        return res.status(403).json({ message: "You can only delete your own notices" });
+      }
+
+      await storage.deleteNotice(noticeId);
+      res.json({ message: "Notice deleted successfully" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Download notice attachment
+  app.get("/uploads/notices/:filename", (req: Request, res: Response) => {
+    const filename = req.params.filename;
+    
+    // Security check: ensure filename doesn't contain path traversal
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ message: "Invalid filename" });
+    }
+    
+    const filePath = path.join(noticeDir, filename);
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "File not found" });
+    }
+    
+    // Set appropriate headers for download
+    res.setHeader('Content-Disposition', 'attachment');
+    res.sendFile(filePath);
   });
   
   // Upload course thumbnail
@@ -675,6 +974,105 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   });
 
+  // Course materials routes
+  app.get("/api/protected/courses/:courseId/materials", async (req: Request, res: Response) => {
+    try {
+      const { courseId } = req.params;
+      
+      // Check if user has access to this course
+      const course = await storage.getCourseById(courseId);
+      if (!course) {
+        return res.status(404).json({ message: "Course not found" });
+      }
+      
+      // For teachers, check if they own the course
+      if (req.user.role === 'teacher' && course.teacherId !== req.user.userId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      // For students, check if they're enrolled
+      if (req.user.role === 'student') {
+        const enrollment = await storage.getEnrollment(courseId, req.user.userId);
+        if (!enrollment) {
+          return res.status(403).json({ message: "Not enrolled in this course" });
+        }
+      }
+      
+      const materials = await storage.getCourseMaterials(courseId);
+      res.json(materials);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/protected/courses/:courseId/materials", upload.single("file"), async (req: Request, res: Response) => {
+    try {
+      const { courseId } = req.params;
+      const { title } = req.body;
+      
+      if (req.user.role !== 'teacher' && req.user.role !== 'admin') {
+        return res.status(403).json({ message: "Only teachers can upload materials" });
+      }
+      
+      // Check if user owns the course
+      const course = await storage.getCourseById(courseId);
+      if (!course) {
+        return res.status(404).json({ message: "Course not found" });
+      }
+      
+      if (req.user.role === 'teacher' && course.teacherId !== req.user.userId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+      
+      const url = `/uploads/materials/${req.file.filename}`;
+      const type = req.file.mimetype.split('/')[0]; // 'image', 'video', 'application', etc.
+      
+      const material = await storage.createCourseMaterial(
+        courseId,
+        title || req.file.originalname,
+        type,
+        url
+      );
+      
+      res.json(material);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/protected/courses/:courseId/materials/:materialId", async (req: Request, res: Response) => {
+    try {
+      const { courseId, materialId } = req.params;
+      
+      if (req.user.role !== 'teacher' && req.user.role !== 'admin') {
+        return res.status(403).json({ message: "Only teachers can delete materials" });
+      }
+      
+      // Check if user owns the course
+      const course = await storage.getCourseById(courseId);
+      if (!course) {
+        return res.status(404).json({ message: "Course not found" });
+      }
+      
+      if (req.user.role === 'teacher' && course.teacherId !== req.user.userId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      
+      const success = await storage.deleteCourseMaterial(materialId);
+      if (success) {
+        res.json({ message: "Material deleted successfully" });
+      } else {
+        res.status(404).json({ message: "Material not found" });
+      }
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Recent grades for student
   app.get("/api/protected/user/recent-grades", authenticateToken, async (req: express.Request, res: express.Response) => {
     try {
@@ -1033,6 +1431,87 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
 
       // For now, just return success - in a real app, you'd store these in the database
       res.json({ message: "Notification settings updated successfully" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get user notifications
+  app.get("/api/protected/notifications", async (req: express.Request, res: express.Response) => {
+    try {
+      console.log("GET /api/protected/notifications - Request received");
+      const userId = req.user?.userId;
+      console.log("User ID:", userId);
+      
+      if (!userId) {
+        console.log("No user ID found, returning 401");
+        return res.status(401).json({ message: "User not authenticated" });
+      }
+
+      console.log("Fetching notifications for user:", userId);
+      const userNotifications = await storage.getUserNotifications(userId, 50);
+      console.log("Found notifications:", userNotifications.length);
+      res.json(userNotifications);
+    } catch (error: any) {
+      console.error("Error fetching notifications:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Mark notification as read
+  app.put("/api/protected/notifications/:id/read", async (req: express.Request, res: express.Response) => {
+    try {
+      const userId = req.user?.userId;
+      const notificationId = req.params.id;
+      
+      if (!userId) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
+
+      const updatedNotification = await storage.markNotificationAsRead(notificationId, userId);
+
+      if (!updatedNotification) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
+
+      res.json({ message: "Notification marked as read" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Mark all notifications as read
+  app.put("/api/protected/notifications/read-all", async (req: express.Request, res: express.Response) => {
+    try {
+      const userId = req.user?.userId;
+      if (!userId) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
+
+      await storage.markAllNotificationsAsRead(userId);
+      res.json({ message: "All notifications marked as read" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Delete notification
+  app.delete("/api/protected/notifications/:id", async (req: express.Request, res: express.Response) => {
+    try {
+      const userId = req.user?.userId;
+      const notificationId = req.params.id;
+      
+      if (!userId) {
+        return res.status(401).json({ message: "User not authenticated" });
+      }
+
+      const deleted = await storage.deleteNotification(notificationId, userId);
+
+      if (!deleted) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
+
+      res.json({ message: "Notification deleted" });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -1969,6 +2448,140 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     }
   });
 
+  // Video Session Routes
+  
+  // Get video session details
+  app.get("/api/video-sessions/:sessionId", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const session = await storage.getVideoSession(req.params.sessionId);
+      if (!session) {
+        return res.status(404).json({ message: "Session not found" });
+      }
+      res.json(session);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Create video session
+  app.post("/api/video-sessions", authenticateToken, requireRole(['teacher', 'admin']), async (req: Request, res: Response) => {
+    try {
+      const sessionData = {
+        ...req.body,
+        hostId: req.user.userId,
+        // Convert timestamp to Date object if it's a number
+        scheduledAt: req.body.scheduledAt ? new Date(req.body.scheduledAt) : undefined,
+      };
+      const session = await storage.createVideoSession(sessionData);
+      res.json(session);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Join video session
+  app.post("/api/video-sessions/:sessionId/join", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const participant = await storage.joinVideoSession(req.params.sessionId, req.user.userId);
+      res.json(participant);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Leave video session
+  app.post("/api/video-sessions/:sessionId/leave", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      await storage.leaveVideoSession(req.params.sessionId, req.user.userId);
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Get session participants
+  app.get("/api/video-sessions/:sessionId/participants", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const participants = await storage.getVideoSessionParticipants(req.params.sessionId);
+      res.json(participants);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get session messages
+  app.get("/api/video-sessions/:sessionId/messages", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const messages = await storage.getVideoSessionMessages(req.params.sessionId);
+      res.json(messages);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Send message to session
+  app.post("/api/video-sessions/:sessionId/messages", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const messageData = {
+        ...req.body,
+        sessionId: req.params.sessionId,
+        senderId: req.user.userId,
+      };
+      const message = await storage.createVideoSessionMessage(messageData);
+      res.json(message);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Get course video sessions
+  app.get("/api/courses/:courseId/video-sessions", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const sessions = await storage.getCourseVideoSessions(req.params.courseId);
+      res.json(sessions);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Start video session
+  app.post("/api/video-sessions/:sessionId/start", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const session = await storage.getVideoSession(req.params.sessionId);
+      if (!session) {
+        return res.status(404).json({ message: "Session not found" });
+      }
+      
+      if (session.hostId !== req.user.userId) {
+        return res.status(403).json({ message: "Only the host can start the session" });
+      }
+
+      const updatedSession = await storage.startVideoSession(req.params.sessionId);
+      res.json(updatedSession);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // End video session
+  app.post("/api/video-sessions/:sessionId/end", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const session = await storage.getVideoSession(req.params.sessionId);
+      if (!session) {
+        return res.status(404).json({ message: "Session not found" });
+      }
+      
+      if (session.hostId !== req.user.userId) {
+        return res.status(403).json({ message: "Only the host can end the session" });
+      }
+
+      const updatedSession = await storage.endVideoSession(req.params.sessionId);
+      res.json(updatedSession);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
   // Ensure course routes are handled by the React app, not as file downloads
   app.get("/courses/:id", (req: Request, res: Response, next: NextFunction) => {
     // This should be handled by the React app's client-side routing
@@ -1976,6 +2589,5 @@ export async function registerRoutes(app: express.Express): Promise<Server> {
     next();
   });
 
-  const httpServer = createServer(app);
-  return httpServer;
+  return httpServer || createServer(app);
 }

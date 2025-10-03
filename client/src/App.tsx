@@ -25,6 +25,10 @@ import NotFound from "@/pages/not-found";
 import CoursePreview from "@/pages/course-preview";
 import CourseLearning from "@/pages/course-learning";
 import InstructorDashboard from "@/pages/instructor-dashboard";
+import Assignments from "@/pages/assignments";
+import AssignmentGrading from "@/pages/assignment-grading";
+import NoticeBoard from "@/pages/notice-board";
+import VideoSession from "@/pages/video-session";
 
 function ProtectedRoute({ component: Component, ...rest }: { component: any }) {
   const { user, isLoading } = useAuth();
@@ -62,6 +66,8 @@ function Router() {
       <Route path="/dashboard" component={() => <ProtectedRoute component={Dashboard} />} />
       <Route path="/courses/:id/preview" component={() => <ProtectedRoute component={CoursePreview} />} />
       <Route path="/courses/:id/learn" component={() => <ProtectedRoute component={CourseLearning} />} />
+      <Route path="/courses/:courseId/assignments" component={() => <ProtectedRoute component={Assignments} />} />
+      <Route path="/courses/:courseId/assignments/:assignmentId/grade" component={() => <ProtectedRoute component={AssignmentGrading} />} />
       <Route path="/courses/:id" component={() => <ProtectedRoute component={CourseDetail} />} />
       <Route path="/courses" component={() => <ProtectedRoute component={Courses} />} />
       <Route path="/assessments" component={() => <ProtectedRoute component={Assessments} />} />
@@ -73,6 +79,9 @@ function Router() {
       <Route path="/discussions/:id" component={() => <ProtectedRoute component={DiscussionDetail} />} />
       <Route path="/profile" component={() => <ProtectedRoute component={Profile} />} />
       <Route path="/settings" component={() => <ProtectedRoute component={Settings} />} />
+      <Route path="/notices" component={() => <ProtectedRoute component={NoticeBoard} />} />
+      <Route path="/courses/:courseId/notices" component={() => <ProtectedRoute component={NoticeBoard} />} />
+      <Route path="/video-session/:sessionId" component={() => <ProtectedRoute component={VideoSession} />} />
 
       <Route path="/instructor-dashboard" component={() => <ProtectedRoute component={InstructorDashboard} />} />
       <Route component={NotFound} />

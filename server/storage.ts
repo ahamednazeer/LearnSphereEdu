@@ -1,13 +1,17 @@
 import { 
   users, courses, courseEnrollments, courseMaterials, assessments, questions, 
   assessmentSubmissions, questionAnswers, discussions, discussionPosts, announcements,
-  modules, lessons, lessonProgress, certificates, assignments,
+  modules, lessons, lessonProgress, certificates, assignments, assignmentSubmissions, noticeBoard, notifications,
+  videoSessions, videoSessionParticipants, videoSessionMessages,
   type User, type InsertUser, type Course, type InsertCourse, type Assessment, 
   type InsertAssessment, type Question, type InsertQuestion, type Discussion,
   type InsertDiscussion, type Announcement, type InsertAnnouncement, type CourseEnrollment,
   type AssessmentSubmission, type DiscussionPost, type Module, type InsertModule,
   type Lesson, type InsertLesson, type LessonProgress, type Certificate, type InsertCertificate,
-  type Assignment, type InsertAssignment, type EnhancedInsertCourse
+  type Assignment, type InsertAssignment, type AssignmentSubmission, type InsertAssignmentSubmission,
+  type NoticeBoard, type InsertNoticeBoard, type EnhancedInsertCourse, type Notification, type InsertNotification,
+  type VideoSession, type InsertVideoSession, type VideoSessionParticipant, type InsertVideoSessionParticipant,
+  type VideoSessionMessage, type InsertVideoSessionMessage
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, count, avg, sql } from "drizzle-orm";
@@ -100,6 +104,54 @@ export interface IStorage {
   
   // Assignment methods
   createAssignment(assignment: InsertAssignment): Promise<Assignment>;
+  getAssignments(courseId: string): Promise<Assignment[]>;
+  getAssignment(id: string): Promise<Assignment | undefined>;
+  updateAssignment(id: string, updates: Partial<InsertAssignment>): Promise<Assignment | undefined>;
+  
+  // Assignment submission methods
+  createAssignmentSubmission(submission: InsertAssignmentSubmission): Promise<AssignmentSubmission>;
+  getAssignmentSubmissions(assignmentId: string): Promise<AssignmentSubmission[]>;
+  getAssignmentSubmission(id: string): Promise<AssignmentSubmission | undefined>;
+  getStudentAssignmentSubmission(assignmentId: string, studentId: string): Promise<AssignmentSubmission | undefined>;
+  updateAssignmentSubmission(id: string, updates: Partial<InsertAssignmentSubmission>): Promise<AssignmentSubmission | undefined>;
+  gradeAssignmentSubmission(id: string, grade: number, feedback: string, gradedBy: string): Promise<AssignmentSubmission | undefined>;
+  
+  // Course materials methods
+  getCourseMaterials(courseId: string): Promise<any[]>;
+  createCourseMaterial(courseId: string, title: string, type: string, url: string): Promise<any>;
+  deleteCourseMaterial(id: string): Promise<boolean>;
+  
+  // Notice board methods
+  createNotice(notice: InsertNoticeBoard): Promise<NoticeBoard>;
+  getNotices(filters?: { targetAudience?: string; courseId?: string; priority?: string }): Promise<NoticeBoard[]>;
+  getNotice(id: string): Promise<NoticeBoard | undefined>;
+  updateNotice(id: string, updates: Partial<InsertNoticeBoard>): Promise<NoticeBoard | undefined>;
+  deleteNotice(id: string): Promise<boolean>;
+  getActiveNotices(targetAudience?: string, courseId?: string): Promise<NoticeBoard[]>;
+  
+  // Notification methods
+  createNotification(notification: InsertNotification): Promise<Notification>;
+  getUserNotifications(userId: string, limit?: number): Promise<Notification[]>;
+  markNotificationAsRead(id: string, userId: string): Promise<Notification | undefined>;
+  markAllNotificationsAsRead(userId: string): Promise<void>;
+  deleteNotification(id: string, userId: string): Promise<boolean>;
+  createAnnouncementNotifications(courseId: string, announcement: Announcement): Promise<void>;
+  
+  // Video session methods
+  createVideoSession(session: InsertVideoSession): Promise<VideoSession>;
+  getVideoSession(id: string): Promise<VideoSession | undefined>;
+  getCourseVideoSessions(courseId: string): Promise<VideoSession[]>;
+  startVideoSession(id: string): Promise<VideoSession | undefined>;
+  endVideoSession(id: string): Promise<VideoSession | undefined>;
+  
+  // Video session participant methods
+  joinVideoSession(sessionId: string, userId: string): Promise<VideoSessionParticipant>;
+  leaveVideoSession(sessionId: string, userId: string): Promise<void>;
+  getVideoSessionParticipants(sessionId: string): Promise<VideoSessionParticipant[]>;
+  
+  // Video session message methods
+  createVideoSessionMessage(message: InsertVideoSessionMessage): Promise<VideoSessionMessage>;
+  getVideoSessionMessages(sessionId: string): Promise<VideoSessionMessage[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -391,6 +443,10 @@ export class DatabaseStorage implements IStorage {
 
   async createAnnouncement(announcement: InsertAnnouncement): Promise<Announcement> {
     const [newAnnouncement] = await db.insert(announcements).values(announcement).returning();
+    
+    // Automatically create notifications for all enrolled students
+    await this.createAnnouncementNotifications(newAnnouncement);
+    
     return newAnnouncement;
   }
 
@@ -687,6 +743,205 @@ export class DatabaseStorage implements IStorage {
     return newAssignment;
   }
 
+  async getAssignments(courseId: string): Promise<Assignment[]> {
+    return await db.select().from(assignments).where(eq(assignments.courseId, courseId)).orderBy(desc(assignments.createdAt));
+  }
+
+  async getAssignment(id: string): Promise<Assignment | undefined> {
+    const [assignment] = await db.select().from(assignments).where(eq(assignments.id, id));
+    return assignment || undefined;
+  }
+
+  async updateAssignment(id: string, updates: Partial<InsertAssignment>): Promise<Assignment | undefined> {
+    const [updated] = await db.update(assignments)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(assignments.id, id))
+      .returning();
+    return updated || undefined;
+  }
+
+  // Assignment submission methods
+  async createAssignmentSubmission(submission: InsertAssignmentSubmission): Promise<AssignmentSubmission> {
+    const [newSubmission] = await db.insert(assignmentSubmissions).values(submission).returning();
+    return newSubmission;
+  }
+
+  async getAssignmentSubmissions(assignmentId: string): Promise<AssignmentSubmission[]> {
+    return await db.select({
+      id: assignmentSubmissions.id,
+      assignmentId: assignmentSubmissions.assignmentId,
+      studentId: assignmentSubmissions.studentId,
+      fileName: assignmentSubmissions.fileName,
+      originalFileName: assignmentSubmissions.originalFileName,
+      filePath: assignmentSubmissions.filePath,
+      fileSize: assignmentSubmissions.fileSize,
+      mimeType: assignmentSubmissions.mimeType,
+      fileHash: assignmentSubmissions.fileHash,
+      submittedAt: assignmentSubmissions.submittedAt,
+      grade: assignmentSubmissions.grade,
+      feedback: assignmentSubmissions.feedback,
+      gradedAt: assignmentSubmissions.gradedAt,
+      gradedBy: assignmentSubmissions.gradedBy,
+      status: assignmentSubmissions.status,
+      // Include student information
+      studentName: sql`COALESCE(${users.firstName}, '') || ' ' || COALESCE(${users.lastName}, '')`.as('studentName'),
+      studentEmail: users.email
+    })
+    .from(assignmentSubmissions)
+    .leftJoin(users, eq(assignmentSubmissions.studentId, users.id))
+    .where(eq(assignmentSubmissions.assignmentId, assignmentId))
+    .orderBy(desc(assignmentSubmissions.submittedAt));
+  }
+
+  async getAssignmentSubmission(id: string): Promise<AssignmentSubmission | undefined> {
+    const [submission] = await db.select().from(assignmentSubmissions).where(eq(assignmentSubmissions.id, id));
+    return submission || undefined;
+  }
+
+  async getStudentAssignmentSubmission(assignmentId: string, studentId: string): Promise<AssignmentSubmission | undefined> {
+    const [submission] = await db.select().from(assignmentSubmissions)
+      .where(and(eq(assignmentSubmissions.assignmentId, assignmentId), eq(assignmentSubmissions.studentId, studentId)));
+    return submission || undefined;
+  }
+
+  async updateAssignmentSubmission(id: string, updates: Partial<InsertAssignmentSubmission>): Promise<AssignmentSubmission | undefined> {
+    const [updated] = await db.update(assignmentSubmissions)
+      .set(updates)
+      .where(eq(assignmentSubmissions.id, id))
+      .returning();
+    return updated || undefined;
+  }
+
+  async gradeAssignmentSubmission(id: string, grade: number, feedback: string, gradedBy: string): Promise<AssignmentSubmission | undefined> {
+    const [updated] = await db.update(assignmentSubmissions)
+      .set({
+        grade,
+        feedback,
+        gradedBy,
+        gradedAt: new Date(),
+        status: 'graded'
+      })
+      .where(eq(assignmentSubmissions.id, id))
+      .returning();
+    return updated || undefined;
+  }
+
+  // Notice board methods
+  async createNotice(notice: InsertNoticeBoard): Promise<NoticeBoard> {
+    const [newNotice] = await db.insert(noticeBoard).values(notice).returning();
+    return newNotice;
+  }
+
+  async getNotices(filters?: { targetAudience?: string; courseId?: string; priority?: string }): Promise<NoticeBoard[]> {
+    let query = db.select({
+      id: noticeBoard.id,
+      title: noticeBoard.title,
+      content: noticeBoard.content,
+      priority: noticeBoard.priority,
+      targetAudience: noticeBoard.targetAudience,
+      courseId: noticeBoard.courseId,
+      attachmentUrl: noticeBoard.attachmentUrl,
+      expiresAt: noticeBoard.expiresAt,
+      createdAt: noticeBoard.createdAt,
+      updatedAt: noticeBoard.updatedAt,
+      authorId: noticeBoard.authorId,
+      // Include author information
+      authorName: sql`COALESCE(${users.firstName}, '') || ' ' || COALESCE(${users.lastName}, '')`.as('authorName'),
+      authorEmail: users.email
+    })
+    .from(noticeBoard)
+    .leftJoin(users, eq(noticeBoard.authorId, users.id));
+
+    const conditions = [];
+    if (filters?.targetAudience) {
+      conditions.push(eq(noticeBoard.targetAudience, filters.targetAudience));
+    }
+    if (filters?.courseId) {
+      conditions.push(eq(noticeBoard.courseId, filters.courseId));
+    }
+    if (filters?.priority) {
+      conditions.push(eq(noticeBoard.priority, filters.priority));
+    }
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions));
+    }
+
+    return await query.orderBy(desc(noticeBoard.createdAt));
+  }
+
+  async getNotice(id: string): Promise<NoticeBoard | undefined> {
+    const [notice] = await db.select().from(noticeBoard).where(eq(noticeBoard.id, id));
+    return notice || undefined;
+  }
+
+  async updateNotice(id: string, updates: Partial<InsertNoticeBoard>): Promise<NoticeBoard | undefined> {
+    const [updated] = await db.update(noticeBoard)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(noticeBoard.id, id))
+      .returning();
+    return updated || undefined;
+  }
+
+  async deleteNotice(id: string): Promise<boolean> {
+    const result = await db.delete(noticeBoard).where(eq(noticeBoard.id, id));
+    return result.changes > 0;
+  }
+
+  async getActiveNotices(targetAudience?: string, courseId?: string): Promise<NoticeBoard[]> {
+    let query = db.select({
+      id: noticeBoard.id,
+      title: noticeBoard.title,
+      content: noticeBoard.content,
+      priority: noticeBoard.priority,
+      targetAudience: noticeBoard.targetAudience,
+      courseId: noticeBoard.courseId,
+      attachmentUrl: noticeBoard.attachmentUrl,
+      expiresAt: noticeBoard.expiresAt,
+      createdAt: noticeBoard.createdAt,
+      updatedAt: noticeBoard.updatedAt,
+      authorId: noticeBoard.authorId,
+      // Include author information
+      authorName: sql`COALESCE(${users.firstName}, '') || ' ' || COALESCE(${users.lastName}, '')`.as('authorName'),
+      authorEmail: users.email
+    })
+    .from(noticeBoard)
+    .leftJoin(users, eq(noticeBoard.authorId, users.id));
+
+    const conditions = [
+      sql`${noticeBoard.expiresAt} IS NULL OR ${noticeBoard.expiresAt} > ${new Date().toISOString()}`
+    ];
+
+    if (targetAudience) {
+      conditions.push(sql`${noticeBoard.targetAudience} = ${targetAudience} OR ${noticeBoard.targetAudience} = 'all'`);
+    }
+    if (courseId) {
+      conditions.push(sql`${noticeBoard.courseId} = ${courseId} OR ${noticeBoard.courseId} IS NULL`);
+    }
+
+    return await query.where(and(...conditions)).orderBy(desc(noticeBoard.priority), desc(noticeBoard.createdAt));
+  }
+
+  // Course materials methods
+  async getCourseMaterials(courseId: string): Promise<any[]> {
+    return await db.select().from(courseMaterials).where(eq(courseMaterials.courseId, courseId)).orderBy(desc(courseMaterials.uploadedAt));
+  }
+
+  async createCourseMaterial(courseId: string, title: string, type: string, url: string): Promise<any> {
+    const [material] = await db.insert(courseMaterials).values({
+      courseId,
+      title,
+      type,
+      url
+    }).returning();
+    return material;
+  }
+
+  async deleteCourseMaterial(id: string): Promise<boolean> {
+    const result = await db.delete(courseMaterials).where(eq(courseMaterials.id, id));
+    return result.changes > 0;
+  }
+
   // Grade methods
   async getRecentGradesForStudent(studentId: string, limit: number): Promise<any[]> {
     try {
@@ -776,6 +1031,216 @@ export class DatabaseStorage implements IStorage {
       console.error('Error getting recent activity for teacher:', error);
       return [];
     }
+  }
+
+  // Notification methods
+  async createNotification(notification: InsertNotification): Promise<Notification> {
+    const [created] = await db.insert(notifications).values(notification).returning();
+    return created;
+  }
+
+  async getUserNotifications(userId: string, limit: number = 50): Promise<Notification[]> {
+    console.log("Storage: getUserNotifications called for userId:", userId, "limit:", limit);
+    
+    const dbNotifications = await db.select()
+      .from(notifications)
+      .where(eq(notifications.userId, userId))
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit);
+    
+    console.log("Storage: Found", dbNotifications.length, "notifications in database");
+    
+    // Map database fields to client expected fields
+    const mappedNotifications = dbNotifications.map(notification => ({
+      ...notification,
+      isRead: notification.read, // Map 'read' to 'isRead' for client compatibility
+    }));
+    
+    console.log("Storage: Returning", mappedNotifications.length, "mapped notifications");
+    return mappedNotifications;
+  }
+
+  async markNotificationAsRead(id: string, userId: string): Promise<Notification | undefined> {
+    const [updated] = await db.update(notifications)
+      .set({ 
+        read: true, 
+        readAt: new Date() 
+      })
+      .where(and(eq(notifications.id, id), eq(notifications.userId, userId)))
+      .returning();
+    
+    if (updated) {
+      return {
+        ...updated,
+        isRead: updated.read, // Map 'read' to 'isRead' for client compatibility
+      };
+    }
+    return undefined;
+  }
+
+  async markAllNotificationsAsRead(userId: string): Promise<void> {
+    await db.update(notifications)
+      .set({ 
+        read: true, 
+        readAt: new Date() 
+      })
+      .where(and(eq(notifications.userId, userId), eq(notifications.read, false)));
+  }
+
+  async deleteNotification(id: string, userId: string): Promise<boolean> {
+    const result = await db.delete(notifications)
+      .where(and(eq(notifications.id, id), eq(notifications.userId, userId)));
+    return result.changes > 0;
+  }
+
+  async createAnnouncementNotifications(courseId: string, announcement: Announcement): Promise<void> {
+    // Get all enrolled students for the course
+    const enrolledStudents = await db.select({ studentId: courseEnrollments.studentId })
+      .from(courseEnrollments)
+      .where(eq(courseEnrollments.courseId, courseId));
+
+    // Create notifications for all enrolled students
+    const notificationPromises = enrolledStudents.map(student => 
+      this.createNotification({
+        userId: student.studentId,
+        type: 'announcement',
+        title: `New announcement in course`,
+        message: announcement.title,
+        actionUrl: `/courses/${courseId}`,
+        relatedId: announcement.id,
+        relatedType: 'announcement',
+      })
+    );
+
+    await Promise.all(notificationPromises);
+  }
+
+  // Video session methods
+  async createVideoSession(session: InsertVideoSession): Promise<VideoSession> {
+    const [newSession] = await db.insert(videoSessions).values(session).returning();
+    return newSession;
+  }
+
+  async getVideoSession(id: string): Promise<VideoSession | undefined> {
+    const [session] = await db.select().from(videoSessions).where(eq(videoSessions.id, id));
+    return session || undefined;
+  }
+
+  async getCourseVideoSessions(courseId: string): Promise<VideoSession[]> {
+    return await db.select().from(videoSessions)
+      .where(eq(videoSessions.courseId, courseId))
+      .orderBy(desc(videoSessions.scheduledAt));
+  }
+
+  async startVideoSession(id: string): Promise<VideoSession | undefined> {
+    const [updatedSession] = await db.update(videoSessions)
+      .set({ 
+        status: 'active',
+        startedAt: new Date()
+      })
+      .where(eq(videoSessions.id, id))
+      .returning();
+    return updatedSession || undefined;
+  }
+
+  async endVideoSession(id: string): Promise<VideoSession | undefined> {
+    const [updatedSession] = await db.update(videoSessions)
+      .set({ 
+        status: 'ended',
+        endedAt: new Date()
+      })
+      .where(eq(videoSessions.id, id))
+      .returning();
+    return updatedSession || undefined;
+  }
+
+  // Video session participant methods
+  async joinVideoSession(sessionId: string, userId: string): Promise<VideoSessionParticipant> {
+    // Check if participant already exists
+    const [existingParticipant] = await db.select()
+      .from(videoSessionParticipants)
+      .where(and(
+        eq(videoSessionParticipants.sessionId, sessionId),
+        eq(videoSessionParticipants.userId, userId)
+      ));
+
+    if (existingParticipant) {
+      // Update existing participant to present
+      const [updatedParticipant] = await db.update(videoSessionParticipants)
+        .set({ 
+          isPresent: true,
+          joinedAt: new Date()
+        })
+        .where(and(
+          eq(videoSessionParticipants.sessionId, sessionId),
+          eq(videoSessionParticipants.userId, userId)
+        ))
+        .returning();
+      return updatedParticipant;
+    } else {
+      // Create new participant
+      const [newParticipant] = await db.insert(videoSessionParticipants)
+        .values({
+          sessionId,
+          userId,
+          isPresent: true,
+          joinedAt: new Date()
+        })
+        .returning();
+      return newParticipant;
+    }
+  }
+
+  async leaveVideoSession(sessionId: string, userId: string): Promise<void> {
+    await db.update(videoSessionParticipants)
+      .set({ 
+        isPresent: false,
+        leftAt: new Date()
+      })
+      .where(and(
+        eq(videoSessionParticipants.sessionId, sessionId),
+        eq(videoSessionParticipants.userId, userId)
+      ));
+  }
+
+  async getVideoSessionParticipants(sessionId: string): Promise<VideoSessionParticipant[]> {
+    return await db.select({
+      id: videoSessionParticipants.id,
+      sessionId: videoSessionParticipants.sessionId,
+      userId: videoSessionParticipants.userId,
+      role: videoSessionParticipants.role,
+      joinedAt: videoSessionParticipants.joinedAt,
+      leftAt: videoSessionParticipants.leftAt,
+      isPresent: videoSessionParticipants.isPresent,
+      permissions: videoSessionParticipants.permissions,
+      name: sql<string>`${users.firstName} || ' ' || ${users.lastName}`.as('name')
+    })
+    .from(videoSessionParticipants)
+    .innerJoin(users, eq(videoSessionParticipants.userId, users.id))
+    .where(eq(videoSessionParticipants.sessionId, sessionId))
+    .orderBy(desc(videoSessionParticipants.joinedAt));
+  }
+
+  // Video session message methods
+  async createVideoSessionMessage(message: InsertVideoSessionMessage): Promise<VideoSessionMessage> {
+    const [newMessage] = await db.insert(videoSessionMessages).values(message).returning();
+    return newMessage;
+  }
+
+  async getVideoSessionMessages(sessionId: string): Promise<VideoSessionMessage[]> {
+    return await db.select({
+      id: videoSessionMessages.id,
+      sessionId: videoSessionMessages.sessionId,
+      senderId: videoSessionMessages.senderId,
+      message: videoSessionMessages.message,
+      messageType: videoSessionMessages.messageType,
+      timestamp: videoSessionMessages.timestamp,
+      senderName: sql<string>`${users.firstName} || ' ' || ${users.lastName}`.as('senderName')
+    })
+    .from(videoSessionMessages)
+    .innerJoin(users, eq(videoSessionMessages.senderId, users.id))
+    .where(eq(videoSessionMessages.sessionId, sessionId))
+    .orderBy(asc(videoSessionMessages.timestamp));
   }
 }
 

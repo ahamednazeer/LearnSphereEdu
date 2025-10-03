@@ -1,7 +1,7 @@
 version: '3.8'
 services:
   learnsphereedu:
-    image: ahamednazeer/learnsphereedu:0.1
+    image: ahamednazeer/learnsphereedu:0.1-test2
     container_name: learnsphereedu
     ports:
       - "5000:5000"

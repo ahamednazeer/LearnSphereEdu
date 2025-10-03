@@ -199,8 +199,105 @@ export const assignments = sqliteTable("assignments", {
   description: text("description"),
   dueDate: integer("due_date", { mode: 'timestamp' }),
   maxPoints: integer("max_points").default(100).notNull(),
+  allowedFileTypes: text("allowed_file_types").default("pdf,doc,docx").notNull(), // Comma-separated file extensions
+  maxFileSize: integer("max_file_size").default(10485760).notNull(), // 10MB in bytes
+  instructions: text("instructions"),
+  status: text("status").default("draft").notNull(), // 'draft', 'published', 'closed'
   createdAt: integer("created_at", { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer("updated_at", { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+});
+
+// Assignment submissions table for file uploads
+export const assignmentSubmissions = sqliteTable("assignment_submissions", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  assignmentId: text("assignment_id").references(() => assignments.id).notNull(),
+  studentId: text("student_id").references(() => users.id).notNull(),
+  fileName: text("file_name").notNull(),
+  originalFileName: text("original_file_name").notNull(),
+  fileSize: integer("file_size").notNull(),
+  mimeType: text("mime_type").notNull(),
+  fileUrl: text("file_url").notNull(), // Path to stored file
+  fileHash: text("file_hash").notNull(), // For integrity checking
+  status: text("status").default("submitted").notNull(), // 'submitted', 'graded', 'returned'
+  submittedAt: integer("submitted_at", { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  grade: integer("grade"), // Points awarded
+  feedback: text("feedback"), // Faculty feedback
+  gradedAt: integer("graded_at", { mode: 'timestamp' }),
+  gradedBy: text("graded_by").references(() => users.id), // Faculty who graded
+});
+
+// Enhanced announcements for notice board with priority and targeting
+export const noticeBoard = sqliteTable("notice_board", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  title: text("title").notNull(),
+  content: text("content").notNull(),
+  authorId: text("author_id").references(() => users.id).notNull(),
+  courseId: text("course_id").references(() => courses.id), // Optional - for course-specific notices
+  priority: text("priority").default("normal").notNull(), // 'low', 'normal', 'high', 'urgent'
+  targetAudience: text("target_audience").default("all").notNull(), // 'all', 'students', 'teachers', 'course_specific'
+  isActive: integer("is_active", { mode: 'boolean' }).default(true).notNull(),
+  expiresAt: integer("expires_at", { mode: 'timestamp' }), // Optional expiration
+  attachmentUrl: text("attachment_url"), // Optional file attachment
+  createdAt: integer("created_at", { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+});
+
+// Notifications system for real-time user notifications
+export const notifications = sqliteTable("notifications", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  userId: text("user_id").references(() => users.id).notNull(),
+  type: text("type").notNull(), // 'course', 'message', 'achievement', 'system', 'announcement', 'assignment', 'grade'
+  title: text("title").notNull(),
+  message: text("message").notNull(),
+  read: integer("read", { mode: 'boolean' }).default(false).notNull(),
+  actionUrl: text("action_url"), // Optional URL to navigate to when clicked
+  relatedId: text("related_id"), // ID of related entity (courseId, announcementId, etc.)
+  relatedType: text("related_type"), // Type of related entity ('course', 'announcement', 'assignment', etc.)
+  createdAt: integer("created_at", { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  readAt: integer("read_at", { mode: 'timestamp' }),
+});
+
+// Video sessions for live classes and meetings
+export const videoSessions = sqliteTable("video_sessions", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  courseId: text("course_id").references(() => courses.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  hostId: text("host_id").references(() => users.id).notNull(),
+  sessionType: text("session_type").notNull().default("class"), // 'class', 'tutoring', 'meeting'
+  status: text("status").notNull().default("scheduled"), // 'scheduled', 'active', 'ended', 'cancelled'
+  scheduledAt: integer("scheduled_at", { mode: 'timestamp' }),
+  startedAt: integer("started_at", { mode: 'timestamp' }),
+  endedAt: integer("ended_at", { mode: 'timestamp' }),
+  duration: integer("duration"), // in minutes
+  maxParticipants: integer("max_participants").default(50),
+  isRecorded: integer("is_recorded", { mode: 'boolean' }).default(false),
+  recordingUrl: text("recording_url"),
+  settings: text("settings", { mode: 'json' }), // JSON for session settings
+  createdAt: integer("created_at", { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+});
+
+// Video session participants
+export const videoSessionParticipants = sqliteTable("video_session_participants", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  sessionId: text("session_id").references(() => videoSessions.id).notNull(),
+  userId: text("user_id").references(() => users.id).notNull(),
+  role: text("role").notNull().default("participant"), // 'host', 'co-host', 'participant'
+  joinedAt: integer("joined_at", { mode: 'timestamp' }),
+  leftAt: integer("left_at", { mode: 'timestamp' }),
+  isPresent: integer("is_present", { mode: 'boolean' }).default(false),
+  permissions: text("permissions", { mode: 'json' }), // JSON for participant permissions
+});
+
+// Chat messages during video sessions
+export const videoSessionMessages = sqliteTable("video_session_messages", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  sessionId: text("session_id").references(() => videoSessions.id).notNull(),
+  senderId: text("sender_id").references(() => users.id).notNull(),
+  message: text("message").notNull(),
+  messageType: text("message_type").notNull().default("text"), // 'text', 'file', 'system'
+  timestamp: integer("timestamp", { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
 // Relations
@@ -212,6 +309,15 @@ export const usersRelations = relations(users, ({ many }) => ({
   announcements: many(announcements),
   lessonProgress: many(lessonProgress),
   certificates: many(certificates),
+  assignmentSubmissions: many(assignmentSubmissions),
+  gradedSubmissions: many(assignmentSubmissions, {
+    relationName: "grader"
+  }),
+  noticeBoard: many(noticeBoard),
+  notifications: many(notifications),
+  hostedVideoSessions: many(videoSessions),
+  videoSessionParticipations: many(videoSessionParticipants),
+  videoSessionMessages: many(videoSessionMessages),
 }));
 
 export const coursesRelations = relations(courses, ({ one, many }) => ({
@@ -227,6 +333,8 @@ export const coursesRelations = relations(courses, ({ one, many }) => ({
   modules: many(modules),
   certificates: many(certificates),
   assignments: many(assignments),
+  noticeBoard: many(noticeBoard),
+  videoSessions: many(videoSessions),
 }));
 
 export const modulesRelations = relations(modules, ({ one, many }) => ({
@@ -271,9 +379,36 @@ export const certificatesRelations = relations(certificates, ({ one }) => ({
   }),
 }));
 
-export const assignmentsRelations = relations(assignments, ({ one }) => ({
+export const assignmentsRelations = relations(assignments, ({ one, many }) => ({
   course: one(courses, {
     fields: [assignments.courseId],
+    references: [courses.id],
+  }),
+  submissions: many(assignmentSubmissions),
+}));
+
+export const assignmentSubmissionsRelations = relations(assignmentSubmissions, ({ one }) => ({
+  assignment: one(assignments, {
+    fields: [assignmentSubmissions.assignmentId],
+    references: [assignments.id],
+  }),
+  student: one(users, {
+    fields: [assignmentSubmissions.studentId],
+    references: [users.id],
+  }),
+  grader: one(users, {
+    fields: [assignmentSubmissions.gradedBy],
+    references: [users.id],
+  }),
+}));
+
+export const noticeBoardRelations = relations(noticeBoard, ({ one }) => ({
+  author: one(users, {
+    fields: [noticeBoard.authorId],
+    references: [users.id],
+  }),
+  course: one(courses, {
+    fields: [noticeBoard.courseId],
     references: [courses.id],
   }),
 }));
@@ -345,6 +480,48 @@ export const discussionPostsRelations = relations(discussionPosts, ({ one }) => 
   }),
 }));
 
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  user: one(users, {
+    fields: [notifications.userId],
+    references: [users.id],
+  }),
+}));
+
+export const videoSessionsRelations = relations(videoSessions, ({ one, many }) => ({
+  course: one(courses, {
+    fields: [videoSessions.courseId],
+    references: [courses.id],
+  }),
+  host: one(users, {
+    fields: [videoSessions.hostId],
+    references: [users.id],
+  }),
+  participants: many(videoSessionParticipants),
+  messages: many(videoSessionMessages),
+}));
+
+export const videoSessionParticipantsRelations = relations(videoSessionParticipants, ({ one }) => ({
+  session: one(videoSessions, {
+    fields: [videoSessionParticipants.sessionId],
+    references: [videoSessions.id],
+  }),
+  user: one(users, {
+    fields: [videoSessionParticipants.userId],
+    references: [users.id],
+  }),
+}));
+
+export const videoSessionMessagesRelations = relations(videoSessionMessages, ({ one }) => ({
+  session: one(videoSessions, {
+    fields: [videoSessionMessages.sessionId],
+    references: [videoSessions.id],
+  }),
+  sender: one(users, {
+    fields: [videoSessionMessages.senderId],
+    references: [users.id],
+  }),
+}));
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -399,6 +576,38 @@ export const insertAssignmentSchema = createInsertSchema(assignments).omit({
   updatedAt: true,
 });
 
+export const insertAssignmentSubmissionSchema = createInsertSchema(assignmentSubmissions).omit({
+  id: true,
+  submittedAt: true,
+});
+
+export const insertNoticeBoardSchema = createInsertSchema(noticeBoard).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertNotificationSchema = createInsertSchema(notifications).omit({
+  id: true,
+  createdAt: true,
+  readAt: true,
+});
+
+export const insertVideoSessionSchema = createInsertSchema(videoSessions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertVideoSessionParticipantSchema = createInsertSchema(videoSessionParticipants).omit({
+  id: true,
+});
+
+export const insertVideoSessionMessageSchema = createInsertSchema(videoSessionMessages).omit({
+  id: true,
+  timestamp: true,
+});
+
 // Enhanced course schema with additional fields
 export const enhancedInsertCourseSchema = createInsertSchema(courses).omit({
   id: true,
@@ -433,4 +642,16 @@ export type InsertCertificate = z.infer<typeof insertCertificateSchema>;
 export type Certificate = typeof certificates.$inferSelect;
 export type InsertAssignment = z.infer<typeof insertAssignmentSchema>;
 export type Assignment = typeof assignments.$inferSelect;
+export type InsertAssignmentSubmission = z.infer<typeof insertAssignmentSubmissionSchema>;
+export type AssignmentSubmission = typeof assignmentSubmissions.$inferSelect;
+export type InsertNoticeBoard = z.infer<typeof insertNoticeBoardSchema>;
+export type NoticeBoard = typeof noticeBoard.$inferSelect;
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+export type Notification = typeof notifications.$inferSelect;
+export type InsertVideoSession = z.infer<typeof insertVideoSessionSchema>;
+export type VideoSession = typeof videoSessions.$inferSelect;
+export type InsertVideoSessionParticipant = z.infer<typeof insertVideoSessionParticipantSchema>;
+export type VideoSessionParticipant = typeof videoSessionParticipants.$inferSelect;
+export type InsertVideoSessionMessage = z.infer<typeof insertVideoSessionMessageSchema>;
+export type VideoSessionMessage = typeof videoSessionMessages.$inferSelect;
 export type EnhancedInsertCourse = z.infer<typeof enhancedInsertCourseSchema>;

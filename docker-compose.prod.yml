@@ -1,6 +1,6 @@
 services:
   learnsphereedu:
-    image: ahamednazeer/learnsphereedu:0.2
+    image: ahamednazeer/learnsphereedu:0.3
     container_name: learnsphereedu
     ports:
       - "5000:5000"
