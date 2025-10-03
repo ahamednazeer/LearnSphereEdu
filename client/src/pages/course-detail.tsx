@@ -993,6 +993,37 @@ export default function CourseDetail() {
     },
   });
 
+  const deleteVideoSessionMutation = useMutation({
+    mutationFn: async (sessionId: string) => {
+      const response = await authenticatedApiRequest("DELETE", `/api/video-sessions/${sessionId}`);
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Failed to delete session");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/courses", courseId, "video-sessions"] });
+      toast({
+        title: "Session deleted!",
+        description: "The live session has been successfully deleted.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Failed to delete session",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleDeleteSession = (sessionId: string) => {
+    if (window.confirm("Are you sure you want to delete this live session? This action cannot be undone.")) {
+      deleteVideoSessionMutation.mutate(sessionId);
+    }
+  };
+
   const handleCreateAnnouncement = (e: React.FormEvent) => {
     e.preventDefault();
     createAnnouncementMutation.mutate(newAnnouncement);
@@ -1333,14 +1364,25 @@ export default function CourseDetail() {
                             {session.scheduledAt && `Scheduled: ${new Date(session.scheduledAt).toLocaleString()}`}
                           </p>
                         </div>
-                        <Button 
-                          onClick={() => setLocation(`/video-session/${session.id}`)}
-                          className="ml-4"
-                          variant={session.status === 'active' ? 'default' : 'outline'}
-                        >
-                          <VideoIcon className="w-4 h-4 mr-2" />
-                          {session.status === 'active' ? 'Join Now' : 'View Details'}
-                        </Button>
+                        <div className="flex items-center gap-2 ml-4">
+                          <Button 
+                            onClick={() => setLocation(`/video-session/${session.id}`)}
+                            variant={session.status === 'active' ? 'default' : 'outline'}
+                          >
+                            <VideoIcon className="w-4 h-4 mr-2" />
+                            {session.status === 'active' ? 'Join Now' : 'View Details'}
+                          </Button>
+                          {user?.role === 'teacher' && course?.teacherId === user?.id && (
+                            <Button 
+                              onClick={() => handleDeleteSession(session.id)}
+                              variant="destructive"
+                              size="icon"
+                              title="Delete session"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     ))}
                 </div>

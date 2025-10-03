@@ -143,6 +143,7 @@ export interface IStorage {
   getCourseVideoSessions(courseId: string): Promise<VideoSession[]>;
   startVideoSession(id: string): Promise<VideoSession | undefined>;
   endVideoSession(id: string): Promise<VideoSession | undefined>;
+  deleteVideoSession(id: string): Promise<boolean>;
   
   // Video session participant methods
   joinVideoSession(sessionId: string, userId: string): Promise<VideoSessionParticipant>;
@@ -1152,6 +1153,27 @@ export class DatabaseStorage implements IStorage {
       .where(eq(videoSessions.id, id))
       .returning();
     return updatedSession || undefined;
+  }
+
+  async deleteVideoSession(id: string): Promise<boolean> {
+    try {
+      // Delete related participants first
+      await db.delete(videoSessionParticipants)
+        .where(eq(videoSessionParticipants.sessionId, id));
+      
+      // Delete related messages
+      await db.delete(videoSessionMessages)
+        .where(eq(videoSessionMessages.sessionId, id));
+      
+      // Delete the session
+      await db.delete(videoSessions)
+        .where(eq(videoSessions.id, id));
+      
+      return true;
+    } catch (error) {
+      console.error('Error deleting video session:', error);
+      return false;
+    }
   }
 
   // Video session participant methods

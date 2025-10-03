@@ -5,6 +5,7 @@ import { registerRoutes } from "./routes";
 import { setupVite } from "./vite";
 import { serveStatic } from "./production";
 import { log } from "./utils";
+import { storage } from "./storage";
 
 const app = express();
 app.use(express.json());
@@ -58,13 +59,13 @@ app.use((req, res, next) => {
   const userIdToSocketId = new Map<string, string>();
   const socketIdToUserId = new Map<string, string>();
   // Store user profiles so we can provide names/roles to new joiners
-  const userProfiles = new Map<string, { userName: string; isHost: boolean }>();
+  const userProfiles = new Map<string, { userName: string; isHost: boolean; isMuted?: boolean; isVideoOff?: boolean }>();
 
   io.on('connection', (socket) => {
     log(`Socket connected: ${socket.id}`);
 
     // Join video session
-    socket.on('join-video-session', ({ sessionId, userId, userName, isHost }) => {
+    socket.on('join-video-session', async ({ sessionId, userId, userName, isHost, isMuted, isVideoOff }) => {
       // Join the session room
       socket.join(sessionId);
 
@@ -73,27 +74,43 @@ app.use((req, res, next) => {
       userIdToSocketId.set(userId, socket.id);
       socketIdToUserId.set(socket.id, userId);
 
-      // Save profile for name lookups
-      userProfiles.set(userId, { userName, isHost: !!isHost });
+      // Save profile for name lookups (including initial mute/video state)
+      userProfiles.set(userId, { userName, isHost: !!isHost, isMuted, isVideoOff });
       
       if (!videoSessions.has(sessionId)) {
         videoSessions.set(sessionId, new Set());
       }
       videoSessions.get(sessionId)!.add(userId);
 
-      // Send current participants list to the new joiner
+      // Update the database joinedAt timestamp to reflect actual WebRTC connection time
+      try {
+        await storage.joinVideoSession(sessionId, userId);
+      } catch (error) {
+        log(`Failed to update joinedAt timestamp for user ${userId} in session ${sessionId}: ${error}`);
+      }
+
+      // Send current participants list to the new joiner (including their mute/video state)
       const participants = Array.from(videoSessions.get(sessionId) || []).filter(id => id !== userId)
-        .map(id => ({ userId: id, userName: userProfiles.get(id)?.userName || 'Unknown', isHost: !!userProfiles.get(id)?.isHost }));
+        .map(id => {
+          const profile = userProfiles.get(id);
+          return { 
+            userId: id, 
+            userName: profile?.userName || 'Unknown', 
+            isHost: !!profile?.isHost,
+            isMuted: profile?.isMuted,
+            isVideoOff: profile?.isVideoOff
+          };
+        });
       socket.emit('participants', participants);
 
-      // Notify other participants in the session
-      socket.to(sessionId).emit('user-joined', { userId, userName, isHost });
+      // Notify other participants in the session (including initial mute/video state)
+      socket.to(sessionId).emit('user-joined', { userId, userName, isHost, isMuted, isVideoOff });
       
       log(`User ${userName} (${userId}) joined video session ${sessionId}`);
     });
 
     // Leave video session
-    socket.on('leave-video-session', ({ sessionId, userId }) => {
+    socket.on('leave-video-session', async ({ sessionId, userId }) => {
       socket.leave(sessionId);
       
       if (videoSessions.has(sessionId)) {
@@ -105,6 +122,13 @@ app.use((req, res, next) => {
 
       // Remove profile
       userProfiles.delete(userId);
+
+      // Update the database leftAt timestamp
+      try {
+        await storage.leaveVideoSession(sessionId, userId);
+      } catch (error) {
+        log(`Failed to update leftAt timestamp for user ${userId} in session ${sessionId}: ${error}`);
+      }
 
       // Notify other participants
       socket.to(sessionId).emit('user-left', { userId });
@@ -121,11 +145,19 @@ app.use((req, res, next) => {
 
     // Participant updates (mute/unmute, video on/off)
     socket.on('participant-update', ({ sessionId, userId, isMuted, isVideoOff }) => {
+      // Update the stored profile state
+      const profile = userProfiles.get(userId);
+      if (profile) {
+        if (isMuted !== undefined) profile.isMuted = isMuted;
+        if (isVideoOff !== undefined) profile.isVideoOff = isVideoOff;
+      }
+      
+      // Broadcast to other participants
       socket.to(sessionId).emit('participant-update', { userId, isMuted, isVideoOff });
     });
 
     // Handle disconnect
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       log(`Socket disconnected: ${socket.id}`);
 
       const userId = socketIdToUserId.get(socket.id);
@@ -139,6 +171,14 @@ app.use((req, res, next) => {
           if (participants.has(userId)) {
             participants.delete(userId);
             socket.to(sessionId).emit('user-left', { userId });
+            
+            // Update the database leftAt timestamp
+            try {
+              await storage.leaveVideoSession(sessionId, userId);
+            } catch (error) {
+              log(`Failed to update leftAt timestamp for user ${userId} in session ${sessionId}: ${error}`);
+            }
+            
             if (participants.size === 0) videoSessions.delete(sessionId);
           }
         }

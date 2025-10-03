@@ -12,6 +12,7 @@ interface Participant {
   isHost?: boolean;
   isMuted?: boolean;
   isVideoOff?: boolean;
+  isSpeaking?: boolean;
 }
 
 interface UseWebRTCProps {
@@ -19,6 +20,8 @@ interface UseWebRTCProps {
   userId: string;
   userName: string;
   isHost?: boolean;
+  initialMuted?: boolean;
+  initialVideoOff?: boolean;
 }
 
 interface WebRTCState {
@@ -30,18 +33,27 @@ interface WebRTCState {
   isScreenSharing: boolean;
   isRecording: boolean;
   error: string | null;
+  isSpeaking: boolean;
 }
 
-export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWebRTCProps) => {
+export const useWebRTC = ({ 
+  sessionId, 
+  userId, 
+  userName, 
+  isHost = false,
+  initialMuted = false,
+  initialVideoOff = false 
+}: UseWebRTCProps) => {
   const [state, setState] = useState<WebRTCState>({
     localStream: null,
     participants: new Map(),
     isConnected: false,
-    isMuted: false,
-    isVideoOff: false,
+    isMuted: initialMuted,
+    isVideoOff: initialVideoOff,
     isScreenSharing: false,
     isRecording: false,
     error: null,
+    isSpeaking: false,
   });
 
   const socketRef = useRef<Socket | null>(null);
@@ -52,6 +64,11 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
   const mediaReadyRef = useRef<boolean>(false);
   const originalVideoTrackRef = useRef<MediaStreamTrack | null>(null); // store camera track for screen share swap
   const pendingPeersRef = useRef<Array<{ userId: string; userName: string; isHost: boolean }>>([]); 
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const localAnalyserRef = useRef<AnalyserNode | null>(null);
+  const remoteAnalysersRef = useRef<Map<string, AnalyserNode>>(new Map());
+  const recordingCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
   const handlersRef = useRef<{
     handleUserJoined?: (data: { userId: string; userName: string; isHost: boolean }) => void;
     handleUserLeft?: (data: { userId: string }) => void;
@@ -81,6 +98,19 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
     });
 
     peer.on('stream', (remoteStream) => {
+      // Setup audio analyzer for remote stream
+      if (audioContextRef.current && remoteStream.getAudioTracks().length > 0) {
+        try {
+          const analyser = audioContextRef.current.createAnalyser();
+          analyser.fftSize = 256;
+          const source = audioContextRef.current.createMediaStreamSource(remoteStream);
+          source.connect(analyser);
+          remoteAnalysersRef.current.set(data.userId, analyser);
+        } catch (err) {
+          console.warn('Failed to setup audio analyzer for remote stream:', err);
+        }
+      }
+
       setState(prev => {
         const newParticipants = new Map(prev.participants);
         newParticipants.set(data.userId, {
@@ -89,6 +119,7 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
           stream: remoteStream,
           peer,
           isHost: data.isHost,
+          isSpeaking: false,
         });
         return { ...prev, participants: newParticipants };
       });
@@ -120,6 +151,21 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
       recorderRef.current = null;
     }
 
+    // Clean up recording resources
+    if (recordingStreamRef.current) {
+      recordingStreamRef.current.getTracks().forEach(track => track.stop());
+      recordingStreamRef.current = null;
+    }
+    recordingCanvasRef.current = null;
+
+    // Clean up audio analyzers
+    remoteAnalysersRef.current.clear();
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    localAnalyserRef.current = null;
+
     // Reset media ready flag
     mediaReadyRef.current = false;
 
@@ -132,6 +178,7 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
       isScreenSharing: false,
       isRecording: false,
       error: null,
+      isSpeaking: false,
     });
   }, []);
 
@@ -151,6 +198,9 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
       peer.destroy();
       peersRef.current.delete(data.userId);
     }
+
+    // Clean up audio analyzer for this participant
+    remoteAnalysersRef.current.delete(data.userId);
 
     setState(prev => {
       const newParticipants = new Map(prev.participants);
@@ -225,6 +275,19 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
     });
 
     peer.on('stream', (remoteStream) => {
+      // Setup audio analyzer for remote stream
+      if (audioContextRef.current && remoteStream.getAudioTracks().length > 0) {
+        try {
+          const analyser = audioContextRef.current.createAnalyser();
+          analyser.fftSize = 256;
+          const source = audioContextRef.current.createMediaStreamSource(remoteStream);
+          source.connect(analyser);
+          remoteAnalysersRef.current.set(data.from, analyser);
+        } catch (err) {
+          console.warn('Failed to setup audio analyzer for remote stream:', err);
+        }
+      }
+
       setState(prev => {
         const newParticipants = new Map(prev.participants);
         const existingParticipant = newParticipants.get(data.from);
@@ -234,6 +297,7 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
           name: existingParticipant?.name || 'Unknown',
           stream: remoteStream,
           peer,
+          isSpeaking: false,
         });
         return { ...prev, participants: newParticipants };
       });
@@ -256,7 +320,7 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
   handlersRef.current.handleSignal = handleSignal;
 
   // Handle new user joining
-  const handleUserJoined = useCallback((data: { userId: string; userName: string; isHost: boolean }) => {
+  const handleUserJoined = useCallback((data: { userId: string; userName: string; isHost: boolean; isMuted?: boolean; isVideoOff?: boolean }) => {
     console.log('handleUserJoined called:', data.userName, 'mediaReady:', mediaReadyRef.current, 'localStream:', !!localStreamRef.current);
 
     // Pre-store participant name so UI badges work even before stream
@@ -269,8 +333,8 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
         stream: existing?.stream,
         peer: existing?.peer,
         isHost: data.isHost,
-        isMuted: existing?.isMuted,
-        isVideoOff: existing?.isVideoOff,
+        isMuted: data.isMuted ?? existing?.isMuted,
+        isVideoOff: data.isVideoOff ?? existing?.isVideoOff,
       });
       return { ...prev, participants: newParticipants };
     });
@@ -295,8 +359,9 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
   const initializeMedia = useCallback(async () => {
     console.log('initializeMedia: Starting getUserMedia...');
     try {
+      // Always request audio, but video is optional based on initialVideoOff
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
+        video: !initialVideoOff,
         audio: true,
       });
 
@@ -304,10 +369,37 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
       localStreamRef.current = stream;
       originalVideoTrackRef.current = stream.getVideoTracks()[0] || null;
       mediaReadyRef.current = true;
-      setState(prev => ({ ...prev, localStream: stream }));
+      
+      // Set initial video state based on initialVideoOff
+      setState(prev => ({ 
+        ...prev, 
+        localStream: stream,
+        isVideoOff: initialVideoOff 
+      }));
 
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
+      }
+
+      // Setup audio analyzer for local stream (independent of video)
+      if (stream.getAudioTracks().length > 0) {
+        try {
+          audioContextRef.current = new AudioContext();
+          const analyser = audioContextRef.current.createAnalyser();
+          analyser.fftSize = 256;
+          const source = audioContextRef.current.createMediaStreamSource(stream);
+          source.connect(analyser);
+          localAnalyserRef.current = analyser;
+          console.log('Audio analyzer setup successfully');
+        } catch (err) {
+          console.warn('Failed to setup audio analyzer for local stream:', err);
+        }
+      }
+
+      // Apply initial mute state if needed
+      if (initialMuted && stream.getAudioTracks().length > 0) {
+        stream.getAudioTracks()[0].enabled = false;
+        setState(prev => ({ ...prev, isMuted: true }));
       }
 
       console.log('initializeMedia: Media ready, socket will connect via useEffect');
@@ -324,7 +416,7 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
       }));
       return null;
     }
-  }, [createPeerConnection]);
+  }, [initialVideoOff, initialMuted]);
 
   // Initialize socket connection - only after media is ready
   useEffect(() => {
@@ -348,7 +440,14 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
 
     socket.on('connect', () => {
       console.log('Connected to signaling server');
-      socket.emit('join-video-session', { sessionId, userId, userName, isHost });
+      socket.emit('join-video-session', { 
+        sessionId, 
+        userId, 
+        userName, 
+        isHost,
+        isMuted: state.isMuted,
+        isVideoOff: state.isVideoOff
+      });
     });
 
     // Use refs to avoid recreating socket on handler changes
@@ -357,7 +456,7 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
     socket.on('signal', (data) => handlersRef.current.handleSignal?.(data));
 
     // Initial participants list with names
-    socket.on('participants', (arr: Array<{ userId: string; userName: string; isHost: boolean }>) => {
+    socket.on('participants', (arr: Array<{ userId: string; userName: string; isHost: boolean; isMuted?: boolean; isVideoOff?: boolean }>) => {
       setState(prev => {
         const newParticipants = new Map(prev.participants);
         for (const p of arr) {
@@ -368,8 +467,8 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
             stream: existing?.stream,
             peer: existing?.peer,
             isHost: p.isHost,
-            isMuted: existing?.isMuted,
-            isVideoOff: existing?.isVideoOff,
+            isMuted: p.isMuted ?? existing?.isMuted,
+            isVideoOff: p.isVideoOff ?? existing?.isVideoOff,
           });
         }
         return { ...prev, participants: newParticipants };
@@ -532,33 +631,491 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
 
   // Start recording
   const startRecording = useCallback(() => {
-    if (localStreamRef.current) {
-      recorderRef.current = new RecordRTC(localStreamRef.current, {
+    if (!localStreamRef.current) {
+      console.error('Cannot start recording: no local stream');
+      return;
+    }
+
+    try {
+      // Create a canvas to composite all video streams (Full HD for professional quality)
+      const canvas = document.createElement('canvas');
+      canvas.width = 1920;
+      canvas.height = 1080;
+      recordingCanvasRef.current = canvas;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        console.error('Cannot get canvas context');
+        return;
+      }
+
+      const recordingStartTime = Date.now();
+
+      // Create video elements for all streams
+      const localVideo = document.createElement('video');
+      localVideo.srcObject = localStreamRef.current;
+      localVideo.muted = true;
+      localVideo.play().catch(e => console.warn('Local video play error:', e));
+
+      const remoteVideos = new Map<string, HTMLVideoElement>();
+      state.participants.forEach((participant, id) => {
+        if (participant.stream) {
+          const video = document.createElement('video');
+          video.srcObject = participant.stream;
+          video.muted = true;
+          video.play().catch(e => console.warn('Remote video play error:', e));
+          remoteVideos.set(id, video);
+        }
+      });
+
+      // Track audio levels for active speaker detection
+      const audioLevels = new Map<string, number>();
+      audioLevels.set('local', 0);
+
+      // Setup audio level monitoring for active speaker detection
+      const setupAudioMonitoring = () => {
+        try {
+          const audioContext = new AudioContext();
+          
+          // Monitor local audio
+          if (localStreamRef.current && localStreamRef.current.getAudioTracks().length > 0) {
+            const localSource = audioContext.createMediaStreamSource(localStreamRef.current);
+            const localAnalyser = audioContext.createAnalyser();
+            localAnalyser.fftSize = 256;
+            localSource.connect(localAnalyser);
+            
+            const localDataArray = new Uint8Array(localAnalyser.frequencyBinCount);
+            const updateLocalLevel = () => {
+              if (!recordingCanvasRef.current) return;
+              localAnalyser.getByteFrequencyData(localDataArray);
+              const average = localDataArray.reduce((a, b) => a + b) / localDataArray.length;
+              audioLevels.set('local', average);
+              requestAnimationFrame(updateLocalLevel);
+            };
+            updateLocalLevel();
+          }
+
+          // Monitor remote audio
+          state.participants.forEach((participant, id) => {
+            if (participant.stream && participant.stream.getAudioTracks().length > 0) {
+              try {
+                const remoteSource = audioContext.createMediaStreamSource(participant.stream);
+                const remoteAnalyser = audioContext.createAnalyser();
+                remoteAnalyser.fftSize = 256;
+                remoteSource.connect(remoteAnalyser);
+                
+                const remoteDataArray = new Uint8Array(remoteAnalyser.frequencyBinCount);
+                const updateRemoteLevel = () => {
+                  if (!recordingCanvasRef.current) return;
+                  remoteAnalyser.getByteFrequencyData(remoteDataArray);
+                  const average = remoteDataArray.reduce((a, b) => a + b) / remoteDataArray.length;
+                  audioLevels.set(id, average);
+                  requestAnimationFrame(updateRemoteLevel);
+                };
+                updateRemoteLevel();
+              } catch (e) {
+                console.warn('Error monitoring remote audio:', e);
+              }
+            }
+          });
+        } catch (e) {
+          console.warn('Error setting up audio monitoring:', e);
+        }
+      };
+
+      setupAudioMonitoring();
+
+      // Helper function to draw rounded rectangle
+      const drawRoundedRect = (x: number, y: number, width: number, height: number, radius: number) => {
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + width - radius, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+        ctx.lineTo(x + width, y + height - radius);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+        ctx.lineTo(x + radius, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+        ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y);
+        ctx.closePath();
+      };
+
+      // Helper function to format duration
+      const formatDuration = (ms: number): string => {
+        const seconds = Math.floor(ms / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+        const displaySeconds = seconds % 60;
+        const displayMinutes = minutes % 60;
+        
+        if (hours > 0) {
+          return `${hours}:${displayMinutes.toString().padStart(2, '0')}:${displaySeconds.toString().padStart(2, '0')}`;
+        }
+        return `${displayMinutes}:${displaySeconds.toString().padStart(2, '0')}`;
+      };
+
+      // Draw all videos to canvas at 30fps
+      const drawFrame = () => {
+        if (!recordingCanvasRef.current) return;
+
+        // Clear canvas with dark background
+        ctx.fillStyle = '#0f0f0f';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Check if screen is being shared - if so, prioritize screen share
+        const screenShareParticipant = Array.from(state.participants.entries()).find(
+          ([_, p]) => p.stream && p.stream.getVideoTracks().some(t => t.label.includes('screen'))
+        );
+
+        if (state.isScreenSharing || screenShareParticipant) {
+          // Screen sharing mode - show screen large with small participant thumbnails
+          const screenStream = state.isScreenSharing ? screenStreamRef.current : screenShareParticipant?.[1].stream;
+          
+          if (screenStream) {
+            const screenVideo = document.createElement('video');
+            screenVideo.srcObject = screenStream;
+            screenVideo.muted = true;
+            screenVideo.play().catch(e => console.warn('Screen video play error:', e));
+
+            // Wait for video to be ready
+            if (screenVideo.readyState >= 2) {
+              // Draw screen share (main area)
+              const mainWidth = canvas.width;
+              const mainHeight = canvas.height - 150; // Leave space for thumbnails at bottom
+              ctx.drawImage(screenVideo, 0, 0, mainWidth, mainHeight);
+
+              // Draw participant thumbnails at bottom
+              const thumbnailHeight = 140;
+              const thumbnailWidth = 180;
+              const thumbnailSpacing = 10;
+              const totalParticipants = 1 + remoteVideos.size;
+              const thumbnailsStartX = (canvas.width - (totalParticipants * (thumbnailWidth + thumbnailSpacing))) / 2;
+
+              // Draw local thumbnail
+              const drawThumbnail = (video: HTMLVideoElement, x: number, y: number, name: string, isVideoOff: boolean, isLocal: boolean) => {
+                const id = isLocal ? 'local' : '';
+                const audioLevel = audioLevels.get(id) || 0;
+                const isActiveSpeaker = audioLevel > 30;
+
+                // Draw video or placeholder
+                if (video.readyState >= 2 && !isVideoOff) {
+                  ctx.save();
+                  drawRoundedRect(x, y, thumbnailWidth, thumbnailHeight, 8);
+                  ctx.clip();
+                  ctx.drawImage(video, x, y, thumbnailWidth, thumbnailHeight);
+                  ctx.restore();
+                } else {
+                  // Placeholder
+                  ctx.fillStyle = '#1f2937';
+                  drawRoundedRect(x, y, thumbnailWidth, thumbnailHeight, 8);
+                  ctx.fill();
+                  
+                  // Draw initials
+                  ctx.fillStyle = '#6366f1';
+                  ctx.beginPath();
+                  ctx.arc(x + thumbnailWidth / 2, y + thumbnailHeight / 2 - 10, 25, 0, Math.PI * 2);
+                  ctx.fill();
+                  
+                  ctx.fillStyle = '#ffffff';
+                  ctx.font = 'bold 20px sans-serif';
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
+                  const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+                  ctx.fillText(initials, x + thumbnailWidth / 2, y + thumbnailHeight / 2 - 10);
+                }
+
+                // Draw active speaker border
+                if (isActiveSpeaker) {
+                  ctx.strokeStyle = '#10b981';
+                  ctx.lineWidth = 4;
+                  drawRoundedRect(x, y, thumbnailWidth, thumbnailHeight, 8);
+                  ctx.stroke();
+                }
+
+                // Draw name label at bottom
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+                ctx.fillRect(x, y + thumbnailHeight - 30, thumbnailWidth, 30);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '14px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(name, x + thumbnailWidth / 2, y + thumbnailHeight - 15);
+              };
+
+              let thumbnailIndex = 0;
+              drawThumbnail(
+                localVideo,
+                thumbnailsStartX + thumbnailIndex * (thumbnailWidth + thumbnailSpacing),
+                mainHeight + 5,
+                'You',
+                state.isVideoOff,
+                true
+              );
+              thumbnailIndex++;
+
+              remoteVideos.forEach((video, id) => {
+                const participant = state.participants.get(id);
+                drawThumbnail(
+                  video,
+                  thumbnailsStartX + thumbnailIndex * (thumbnailWidth + thumbnailSpacing),
+                  mainHeight + 5,
+                  participant?.name || 'Participant',
+                  participant?.isVideoOff || false,
+                  false
+                );
+                thumbnailIndex++;
+              });
+            }
+          }
+        } else {
+          // Grid mode - show all participants in grid
+          const totalVideos = 1 + remoteVideos.size;
+          const cols = Math.ceil(Math.sqrt(totalVideos));
+          const rows = Math.ceil(totalVideos / cols);
+          
+          const padding = 20;
+          const gap = 15;
+          const availableWidth = canvas.width - (padding * 2) - (gap * (cols - 1));
+          const availableHeight = canvas.height - (padding * 2) - (gap * (rows - 1));
+          const videoWidth = availableWidth / cols;
+          const videoHeight = availableHeight / rows;
+
+          // Helper to draw a participant tile
+          const drawParticipantTile = (
+            video: HTMLVideoElement,
+            x: number,
+            y: number,
+            name: string,
+            isVideoOff: boolean,
+            participantId: string
+          ) => {
+            const audioLevel = audioLevels.get(participantId) || 0;
+            const isActiveSpeaker = audioLevel > 30;
+
+            // Draw video or placeholder
+            if (video.readyState >= 2 && !isVideoOff) {
+              ctx.save();
+              drawRoundedRect(x, y, videoWidth, videoHeight, 12);
+              ctx.clip();
+              ctx.drawImage(video, x, y, videoWidth, videoHeight);
+              ctx.restore();
+            } else {
+              // Draw placeholder
+              ctx.fillStyle = '#1f2937';
+              drawRoundedRect(x, y, videoWidth, videoHeight, 12);
+              ctx.fill();
+              
+              // Draw avatar circle with initials
+              ctx.fillStyle = '#6366f1';
+              ctx.beginPath();
+              const avatarRadius = Math.min(videoWidth, videoHeight) * 0.15;
+              ctx.arc(x + videoWidth / 2, y + videoHeight / 2 - 20, avatarRadius, 0, Math.PI * 2);
+              ctx.fill();
+              
+              ctx.fillStyle = '#ffffff';
+              ctx.font = `bold ${avatarRadius}px sans-serif`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+              ctx.fillText(initials, x + videoWidth / 2, y + videoHeight / 2 - 20);
+            }
+
+            // Draw active speaker border
+            if (isActiveSpeaker) {
+              ctx.strokeStyle = '#10b981';
+              ctx.lineWidth = 6;
+              drawRoundedRect(x, y, videoWidth, videoHeight, 12);
+              ctx.stroke();
+            } else {
+              // Draw subtle border
+              ctx.strokeStyle = '#374151';
+              ctx.lineWidth = 2;
+              drawRoundedRect(x, y, videoWidth, videoHeight, 12);
+              ctx.stroke();
+            }
+
+            // Draw name label at bottom
+            const labelHeight = 40;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+            ctx.fillRect(x + 10, y + videoHeight - labelHeight - 10, videoWidth - 20, labelHeight);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 18px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(name, x + 20, y + videoHeight - labelHeight / 2 - 10);
+          };
+
+          // Draw local video
+          drawParticipantTile(
+            localVideo,
+            padding,
+            padding,
+            'You',
+            state.isVideoOff,
+            'local'
+          );
+
+          // Draw remote videos
+          let index = 1;
+          remoteVideos.forEach((video, id) => {
+            const col = index % cols;
+            const row = Math.floor(index / cols);
+            const x = padding + col * (videoWidth + gap);
+            const y = padding + row * (videoHeight + gap);
+
+            const participant = state.participants.get(id);
+            drawParticipantTile(
+              video,
+              x,
+              y,
+              participant?.name || 'Participant',
+              participant?.isVideoOff || false,
+              id
+            );
+            index++;
+          });
+        }
+
+        // Draw recording indicator (top-left corner)
+        const recX = 20;
+        const recY = 20;
+        ctx.fillStyle = 'rgba(220, 38, 38, 0.9)';
+        ctx.beginPath();
+        ctx.arc(recX + 10, recY + 10, 8, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(recX + 25, recY, 80, 20);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 14px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('REC', recX + 30, recY + 10);
+
+        // Draw duration (top-right corner)
+        const duration = formatDuration(Date.now() - recordingStartTime);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        const durationWidth = ctx.measureText(duration).width + 20;
+        ctx.fillRect(canvas.width - durationWidth - 20, 20, durationWidth, 20);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 14px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(duration, canvas.width - 30, 30);
+
+        if (recordingCanvasRef.current) {
+          requestAnimationFrame(drawFrame);
+        }
+      };
+
+      // Start drawing
+      drawFrame();
+
+      // Capture canvas stream
+      const canvasStream = canvas.captureStream(30); // 30 fps
+      
+      // Mix audio from all streams
+      const audioContext = new AudioContext();
+      const audioDestination = audioContext.createMediaStreamDestination();
+      
+      // Add local audio
+      if (localStreamRef.current.getAudioTracks().length > 0 && !state.isMuted) {
+        const localAudioSource = audioContext.createMediaStreamSource(localStreamRef.current);
+        localAudioSource.connect(audioDestination);
+      }
+      
+      // Add remote audio
+      state.participants.forEach((participant) => {
+        if (participant.stream && participant.stream.getAudioTracks().length > 0 && !participant.isMuted) {
+          try {
+            const remoteAudioSource = audioContext.createMediaStreamSource(participant.stream);
+            remoteAudioSource.connect(audioDestination);
+          } catch (e) {
+            console.warn('Error adding remote audio:', e);
+          }
+        }
+      });
+
+      // Combine video from canvas and mixed audio
+      const recordingStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...audioDestination.stream.getAudioTracks()
+      ]);
+      
+      recordingStreamRef.current = recordingStream;
+
+      // Start RecordRTC with the composite stream
+      // Try to use H.264 codec for better compatibility, fallback to VP8
+      let mimeType = 'video/webm;codecs=h264,opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm;codecs=vp8,opus';
+      }
+      
+      recorderRef.current = new RecordRTC(recordingStream, {
         type: 'video',
-        mimeType: 'video/webm',
+        mimeType: mimeType,
+        videoBitsPerSecond: 5000000, // 5 Mbps for Full HD quality
+        recorderType: RecordRTC.MediaStreamRecorder,
       });
 
       recorderRef.current.startRecording();
       setState(prev => ({ ...prev, isRecording: true }));
+      console.log('Recording started successfully with mimeType:', mimeType, '(Full HD 1920x1080)');
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      setState(prev => ({ 
+        ...prev, 
+        error: 'Failed to start recording' 
+      }));
     }
-  }, []);
+  }, [state.participants, state.isVideoOff, state.isMuted, state.isScreenSharing]);
 
   // Stop recording
   const stopRecording = useCallback(() => {
     if (recorderRef.current) {
-      recorderRef.current.stopRecording(() => {
+      recorderRef.current.stopRecording(async () => {
         const blob = recorderRef.current?.getBlob();
         if (blob) {
-          // Here you would typically upload the recording to your server
+          // Determine file extension based on blob type
+          let extension = 'webm';
+          let fileName = `session-${sessionId}-${Date.now()}`;
+          
+          // If the blob contains h264, it's more compatible with MP4 players
+          // We'll still save as .webm but it will play in most video players
+          if (blob.type.includes('h264')) {
+            console.log('Recording uses H.264 codec (MP4-compatible)');
+          }
+          
+          // For better compatibility, we save as .mp4 extension even though it's WebM container
+          // Modern video players can handle WebM with H.264 codec
+          const finalFileName = `${fileName}.mp4`;
+          
+          // Create download link
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = `session-${sessionId}-${Date.now()}.webm`;
+          a.download = finalFileName;
+          document.body.appendChild(a);
           a.click();
+          document.body.removeChild(a);
+          
+          // Clean up
+          setTimeout(() => URL.revokeObjectURL(url), 100);
+          
+          console.log(`Recording saved as ${finalFileName} (${(blob.size / 1024 / 1024).toFixed(2)} MB)`);
         }
+        
+        // Clean up recording resources
+        if (recordingStreamRef.current) {
+          recordingStreamRef.current.getTracks().forEach(track => track.stop());
+          recordingStreamRef.current = null;
+        }
+        
+        recordingCanvasRef.current = null;
+        recorderRef.current = null;
       });
 
       setState(prev => ({ ...prev, isRecording: false }));
+      console.log('Recording stopped');
     }
   }, [sessionId]);
 
@@ -573,6 +1130,59 @@ export const useWebRTC = ({ sessionId, userId, userName, isHost = false }: UseWe
     initializeMedia();
     return cleanup;
   }, [initializeMedia, cleanup]);
+
+  // Monitor audio levels for speaking detection
+  useEffect(() => {
+    if (!state.localStream && state.participants.size === 0) return;
+
+    const SPEAKING_THRESHOLD = 30; // Adjust this value for sensitivity
+    const dataArray = new Uint8Array(128);
+
+    const checkAudioLevels = () => {
+      // Check local audio
+      if (localAnalyserRef.current && !state.isMuted) {
+        localAnalyserRef.current.getByteFrequencyData(dataArray);
+        const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+        const isSpeaking = average > SPEAKING_THRESHOLD;
+        
+        setState(prev => {
+          if (prev.isSpeaking !== isSpeaking) {
+            return { ...prev, isSpeaking };
+          }
+          return prev;
+        });
+      }
+
+      // Check remote participants audio
+      setState(prev => {
+        const updatedParticipants = new Map(prev.participants);
+        let hasChanges = false;
+
+        remoteAnalysersRef.current.forEach((analyser, userId) => {
+          const participant = updatedParticipants.get(userId);
+          if (participant && !participant.isMuted) {
+            analyser.getByteFrequencyData(dataArray);
+            const average = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+            const isSpeaking = average > SPEAKING_THRESHOLD;
+            
+            if (participant.isSpeaking !== isSpeaking) {
+              updatedParticipants.set(userId, { ...participant, isSpeaking });
+              hasChanges = true;
+            }
+          }
+        });
+
+        if (hasChanges) {
+          return { ...prev, participants: updatedParticipants };
+        }
+        return prev;
+      });
+    };
+
+    const intervalId = setInterval(checkAudioLevels, 100); // Check every 100ms
+
+    return () => clearInterval(intervalId);
+  }, [state.localStream, state.participants, state.isMuted]);
 
   return {
     ...state,

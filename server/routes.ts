@@ -2582,6 +2582,35 @@ export async function registerRoutes(app: express.Express, httpServer?: Server):
     }
   });
 
+  // Delete video session
+  app.delete("/api/video-sessions/:sessionId", authenticateToken, async (req: Request, res: Response) => {
+    try {
+      const session = await storage.getVideoSession(req.params.sessionId);
+      if (!session) {
+        return res.status(404).json({ message: "Session not found" });
+      }
+      
+      // Only the host (teacher who created the session) can delete it
+      if (session.hostId !== req.user.userId) {
+        return res.status(403).json({ message: "Only the session creator can delete this session" });
+      }
+
+      // Only allow deletion of scheduled or active sessions
+      if (session.status !== 'scheduled' && session.status !== 'active') {
+        return res.status(400).json({ message: "Only scheduled or active sessions can be deleted" });
+      }
+
+      const deleted = await storage.deleteVideoSession(req.params.sessionId);
+      if (deleted) {
+        res.json({ success: true, message: "Session deleted successfully" });
+      } else {
+        res.status(500).json({ message: "Failed to delete session" });
+      }
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Ensure course routes are handled by the React app, not as file downloads
   app.get("/courses/:id", (req: Request, res: Response, next: NextFunction) => {
     // This should be handled by the React app's client-side routing
